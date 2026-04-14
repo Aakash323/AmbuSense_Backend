@@ -30,4 +30,5 @@ export enum UserRole {
   ADMIN = 'admin',
   DISPATCHER = 'dispatcher',
   DRIVER = 'driver',
+  PATIENT= 'patient',
 }
