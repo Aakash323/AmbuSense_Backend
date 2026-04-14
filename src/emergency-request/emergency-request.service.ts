@@ -2,8 +2,10 @@ import {
   BadRequestException,
   Injectable,
   NotFoundException,
+  OnModuleInit,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
+import { ModuleRef } from '@nestjs/core';
 import { isValidObjectId, Model, Types } from 'mongoose';
 import { CreateEmergencyRequestDto } from './dto/create-emergency-request.dto';
 import { UpdateEmergencyRequestDto } from './dto/update-emergency-request.dto';
@@ -28,9 +30,12 @@ import {
 import { DispatchEmergencyRequestDto } from './dto/dispatch-emergency-request.dto';
 import { CancelEmergencyRequestDto } from './dto/cancel-emergency-request.dto';
 import { FindEmergencyRequestsQueryDto } from './dto/find-emergency-requests-query.dto';
+import { TrackingGateway } from '../gateway/tracking.gateway';
 
 @Injectable()
-export class EmergencyRequestService {
+export class EmergencyRequestService implements OnModuleInit {
+  private trackingGateway?: TrackingGateway;
+
   private readonly ALLOWED_STATUS_TRANSITIONS: Record<
     EmergencyRequestStatus,
     EmergencyRequestStatus[]
@@ -52,7 +57,34 @@ export class EmergencyRequestService {
     private readonly ambulanceModel: Model<AmbulanceDocument>,
     @InjectModel(Hospital.name)
     private readonly hospitalModel: Model<HospitalDocument>,
+    private readonly moduleRef: ModuleRef,
   ) {}
+
+  onModuleInit() {
+    this.trackingGateway = this.moduleRef.get(TrackingGateway, {
+      strict: false,
+    });
+  }
+
+  private emitEmergencyRequestCreated(data: EmergencyRequestDocument) {
+    this.trackingGateway?.emitEmergencyRequestCreated(data);
+  }
+
+  private emitEmergencyRequestUpdated(data: EmergencyRequestDocument) {
+    this.trackingGateway?.emitEmergencyRequestUpdated(data);
+  }
+
+  private emitEmergencyRequestDispatched(data: EmergencyRequestDocument) {
+    this.trackingGateway?.emitEmergencyRequestDispatched(data);
+  }
+
+  private emitEmergencyRequestCancelled(data: EmergencyRequestDocument) {
+    this.trackingGateway?.emitEmergencyRequestCancelled(data);
+  }
+
+  private emitEmergencyRequestDeleted(id: string) {
+    this.trackingGateway?.emitEmergencyRequestDeleted({ id });
+  }
 
   async create(createDto: CreateEmergencyRequestDto) {
     const { coordinates, assignedHospital, ...rest } = createDto;
@@ -110,7 +142,14 @@ export class EmergencyRequestService {
 
     const created = await this.emergencyRequestModel.create(requestData);
 
-    return this.findOne(created.id);
+    const result = await this.findOne(created.id);
+    this.emitEmergencyRequestCreated(result);
+
+    if (result.status === EmergencyRequestStatus.ASSIGNED) {
+      this.emitEmergencyRequestDispatched(result);
+    }
+
+    return result;
   }
 
   async findAll(query: FindEmergencyRequestsQueryDto = {}) {
@@ -197,7 +236,10 @@ export class EmergencyRequestService {
 
     const updated = await request.save();
 
-    return this.findOne(updated.id);
+    const result = await this.findOne(updated.id);
+    this.emitEmergencyRequestUpdated(result);
+
+    return result;
   }
 
   async dispatch(id: string, dto: DispatchEmergencyRequestDto) {
@@ -238,7 +280,10 @@ export class EmergencyRequestService {
 
     await request.save();
 
-    return this.findOne(request.id);
+    const result = await this.findOne(request.id);
+    this.emitEmergencyRequestDispatched(result);
+
+    return result;
   }
 
   async cancel(id: string, dto: CancelEmergencyRequestDto) {
@@ -269,7 +314,10 @@ export class EmergencyRequestService {
 
     await request.save();
 
-    return this.findOne(request.id);
+    const result = await this.findOne(request.id);
+    this.emitEmergencyRequestCancelled(result);
+
+    return result;
   }
 
   async assign(id: string, dto: AssignEmergencyRequestDto) {
@@ -330,7 +378,10 @@ export class EmergencyRequestService {
 
     await request.save();
 
-    return this.findOne(request.id);
+    const result = await this.findOne(request.id);
+    this.emitEmergencyRequestDispatched(result);
+
+    return result;
   }
 
   async updateStatus(id: string, newStatus: EmergencyRequestStatus) {
@@ -367,7 +418,10 @@ export class EmergencyRequestService {
 
     await request.save();
 
-    return this.findOne(request.id);
+    const result = await this.findOne(request.id);
+    this.emitEmergencyRequestUpdated(result);
+
+    return result;
   }
 
   async remove(id: string) {
@@ -388,6 +442,7 @@ export class EmergencyRequestService {
     }
 
     await this.emergencyRequestModel.findByIdAndDelete(id);
+    this.emitEmergencyRequestDeleted(id);
 
     return { message: 'Emergency request deleted successfully' };
   }
@@ -445,7 +500,7 @@ export class EmergencyRequestService {
             assignedAt,
           },
         },
-        { new: true },
+        { returnDocument: 'after' },
       );
 
       if (claimed) {
@@ -505,7 +560,7 @@ export class EmergencyRequestService {
           assignedAt,
         },
       },
-      { new: true },
+      { returnDocument: 'after' },
     );
 
     if (!claimed) {

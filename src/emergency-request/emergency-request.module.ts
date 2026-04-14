@@ -8,6 +8,7 @@ import { EmergencyRequestController } from './emergency-request.controller';
 import { EmergencyRequestService } from './emergency-request.service';
 import { Ambulance, AmbulanceSchema } from '../ambulance/entities/ambulance.entity';
 import { Hospital, HospitalSchema } from '../hospital/entities/hospital.entity';
+import { GatewayModule } from '../gateway/gateway.module';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { Hospital, HospitalSchema } from '../hospital/entities/hospital.entity';
         schema: HospitalSchema,
       },
     ]),
+    GatewayModule,
   ],
   controllers: [EmergencyRequestController],
   providers: [EmergencyRequestService],

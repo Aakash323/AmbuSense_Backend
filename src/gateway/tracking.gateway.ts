@@ -11,6 +11,7 @@ import {
 import { Server, Socket } from 'socket.io';
 import { AmbulanceService } from '../ambulance/ambulance.service';
 import { AmbulanceDocument } from '../ambulance/entities/ambulance.entity';
+import { EmergencyRequestDocument } from '../emergency-request/entities/emergency-request.entity';
 
 @WebSocketGateway({
   cors: {
@@ -120,5 +121,30 @@ export class TrackingGateway
     updatedAt: Date;
   }) {
     this.server.emit('ambulance.status.updated', payload);
+  }
+
+  emitEmergencyRequestCreated(request: EmergencyRequestDocument) {
+    console.log('[socket] emitting emergency.request.created:', request.id);
+    this.server.emit('emergency.request.created', request);
+  }
+
+  emitEmergencyRequestUpdated(request: EmergencyRequestDocument) {
+    console.log('[socket] emitting emergency.request.updated:', request.id);
+    this.server.emit('emergency.request.updated', request);
+  }
+
+  emitEmergencyRequestDispatched(request: EmergencyRequestDocument) {
+    console.log('[socket] emitting emergency.request.dispatched:', request.id);
+    this.server.emit('emergency.request.dispatched', request);
+  }
+
+  emitEmergencyRequestCancelled(request: EmergencyRequestDocument) {
+    console.log('[socket] emitting emergency.request.cancelled:', request.id);
+    this.server.emit('emergency.request.cancelled', request);
+  }
+
+  emitEmergencyRequestDeleted(payload: { id: string }) {
+    console.log('[socket] emitting emergency.request.deleted:', payload.id);
+    this.server.emit('emergency.request.deleted', payload);
   }
 }
