@@ -17,6 +17,13 @@ export enum EmergencyRequestStatus {
   TRANSPORTING = 'transporting',
   AT_HOSPITAL = 'at-hospital',
   COMPLETED = 'completed',
+  CANCELLED = 'cancelled',
+}
+
+export enum HospitalAssignmentTechnique {
+  USER_CHOICE = 'user-choice',
+  SYSTEM_AUTO = 'system-auto',
+  ADMIN_OVERRIDE = 'admin-override',
 }
 
 export enum UserRole {
@@ -24,5 +31,3 @@ export enum UserRole {
   DISPATCHER = 'dispatcher',
   DRIVER = 'driver',
 }
-
-

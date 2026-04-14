@@ -8,6 +8,7 @@ import { EmergencyRequestModule } from './emergency-request/emergency-request.mo
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
 import { GatewayModule } from './gateway/gateway.module';
+import { DashboardModule } from './dashboard/dashboard.module';
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { GatewayModule } from './gateway/gateway.module';
     AmbulanceModule,
     HospitalModule,
     EmergencyRequestModule,
+    DashboardModule,
     GatewayModule,
   ],
   controllers: [AppController],

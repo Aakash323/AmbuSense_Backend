@@ -2,6 +2,7 @@ import {
   ArrayMaxSize,
   ArrayMinSize,
   IsArray,
+  IsMongoId,
   IsOptional,
   IsString,
 } from 'class-validator';
@@ -22,11 +23,11 @@ export class UpdateEmergencyRequestDto {
   coordinates?: [number, number];
 
   @IsOptional()
-  @IsString()
+  @IsMongoId()
   assignedAmbulance?: string;
 
   @IsOptional()
-  @IsString()
+  @IsMongoId()
   assignedHospital?: string;
 
   @IsOptional()

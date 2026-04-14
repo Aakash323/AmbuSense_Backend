@@ -1,12 +1,12 @@
-import { IsOptional, IsString } from 'class-validator';
+import { IsMongoId, IsOptional, IsString } from 'class-validator';
 
 export class AssignEmergencyRequestDto {
   @IsOptional()
-  @IsString()
+  @IsMongoId()
   ambulanceId?: string;
 
   @IsOptional()
-  @IsString()
+  @IsMongoId()
   hospitalId?: string;
 
   @IsOptional()

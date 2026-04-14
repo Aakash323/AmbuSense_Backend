@@ -6,11 +6,13 @@ import {
   Param,
   Patch,
   Post,
+  Query,
 } from '@nestjs/common';
 import { AmbulanceService } from './ambulance.service';
 import { CreateAmbulanceDto } from './dto/create-ambulance.dto';
 import { UpdateAmbulanceDto } from './dto/update-ambulance.dto';
 import { UpdateAmbulanceStatusDto } from './dto/update-ambulance-status.dto';
+import { FindAmbulancesQueryDto } from './dto/find-ambulances-query.dto';
 
 @Controller('ambulances')
 export class AmbulanceController {
@@ -22,8 +24,8 @@ export class AmbulanceController {
   }
 
   @Get()
-  findAll() {
-    return this.ambulanceService.findAll();
+  findAll(@Query() query: FindAmbulancesQueryDto) {
+    return this.ambulanceService.findAll(query);
   }
 
   @Get(':id')

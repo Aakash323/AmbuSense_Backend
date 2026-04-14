@@ -4,6 +4,7 @@ import { Model } from 'mongoose';
 import { CreateHospitalDto } from './dto/create-hospital.dto';
 import { UpdateHospitalDto } from './dto/update-hospital.dto';
 import { Hospital, HospitalDocument } from './entities/hospital.entity';
+import { FindHospitalsQueryDto } from './dto/find-hospitals-query.dto';
 
 @Injectable()
 export class HospitalService {
@@ -24,8 +25,28 @@ export class HospitalService {
     });
   }
 
-  async findAll() {
-    return this.hospitalModel.find().sort({ createdAt: -1 });
+  async findAll(query: FindHospitalsQueryDto = {}) {
+    const filter: Record<string, unknown> = {};
+
+    if (query.status) {
+      filter.status = query.status;
+    }
+
+    if (query.hasAvailableBeds !== undefined) {
+      filter.availableBeds = query.hasAvailableBeds ? { $gt: 0 } : 0;
+    }
+
+    if (query.search) {
+      const regex = new RegExp(this.escapeRegex(query.search), 'i');
+      filter.$or = [
+        { name: regex },
+        { phone: regex },
+        { address: regex },
+        { specialization: regex },
+      ];
+    }
+
+    return this.hospitalModel.find(filter).sort({ createdAt: -1 });
   }
 
   async findOne(id: string) {
@@ -68,5 +89,9 @@ export class HospitalService {
     }
 
     return { message: 'Hospital deleted successfully' };
+  }
+
+  private escapeRegex(value: string) {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 }

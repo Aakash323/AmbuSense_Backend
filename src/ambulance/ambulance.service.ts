@@ -14,6 +14,7 @@ import { UpdateAmbulanceStatusDto } from './dto/update-ambulance-status.dto';
 import { Ambulance, AmbulanceDocument } from './entities/ambulance.entity';
 import { AmbulanceStatus } from '../constants/enums';
 import { TrackingGateway } from '../gateway/tracking.gateway';
+import { FindAmbulancesQueryDto } from './dto/find-ambulances-query.dto';
 
 const ALLOWED_STATUS_TRANSITIONS: Record<AmbulanceStatus, AmbulanceStatus[]> = {
   [AmbulanceStatus.OFFLINE]: [AmbulanceStatus.AVAILABLE],
@@ -74,6 +75,9 @@ export class AmbulanceService implements OnModuleInit {
   async create(createAmbulanceDto: CreateAmbulanceDto) {
     const { coordinates, ...rest } = createAmbulanceDto;
 
+      if(await this.ambulanceModel.findOne({ ambulanceCode: createAmbulanceDto.ambulanceCode })) {
+        throw new BadRequestException('Ambulance with this code already exists');
+      }
     const created = await this.ambulanceModel.create({
       ...rest,
       currentLocation: {
@@ -87,8 +91,27 @@ export class AmbulanceService implements OnModuleInit {
     return created;
   }
 
-  async findAll() {
-    return this.ambulanceModel.find().sort({ createdAt: -1 });
+  async findAll(query: FindAmbulancesQueryDto = {}) {
+    const filter: Record<string, unknown> = {};
+
+    if (query.status) {
+      filter.status = query.status;
+    }
+
+    if (query.isActive !== undefined) {
+      filter.isActive = query.isActive;
+    }
+
+    if (query.search) {
+      const regex = new RegExp(this.escapeRegex(query.search), 'i');
+      filter.$or = [
+        { ambulanceCode: regex },
+        { driverName: regex },
+        { phone: regex },
+      ];
+    }
+
+    return this.ambulanceModel.find(filter).sort({ createdAt: -1 });
   }
 
   async findOne(id: string) {
@@ -215,5 +238,9 @@ export class AmbulanceService implements OnModuleInit {
     }
 
     return { message: 'Ambulance deleted successfully' };
+  }
+
+  private escapeRegex(value: string) {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 }

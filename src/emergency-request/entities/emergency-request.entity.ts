@@ -1,6 +1,9 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
-import { EmergencyRequestStatus } from '../../constants/enums';
+import {
+  EmergencyRequestStatus,
+  HospitalAssignmentTechnique,
+} from '../../constants/enums';
 
 export type EmergencyRequestDocument = HydratedDocument<EmergencyRequest>;
 
@@ -44,6 +47,11 @@ export class EmergencyRequest {
   assignedHospital?: Types.ObjectId | null;
 
   @Prop({
+    enum: Object.values(HospitalAssignmentTechnique),
+  })
+  hospitalAssignmentTechnique?: HospitalAssignmentTechnique;
+
+  @Prop({
     required: true,
     enum: Object.values(EmergencyRequestStatus),
     default: EmergencyRequestStatus.PENDING,
@@ -61,6 +69,12 @@ export class EmergencyRequest {
 
   @Prop({ type: Date, default: null })
   completedAt?: Date | null;
+
+  @Prop({ type: Date, default: null })
+  cancelledAt?: Date | null;
+
+  @Prop({ default: '' })
+  cancellationReason?: string;
 
   createdAt?: Date;
   updatedAt?: Date;

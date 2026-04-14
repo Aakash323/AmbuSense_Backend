@@ -6,12 +6,16 @@ import {
   Param,
   Patch,
   Post,
+  Query,
 } from '@nestjs/common';
 import { EmergencyRequestService } from './emergency-request.service';
 import { CreateEmergencyRequestDto } from './dto/create-emergency-request.dto';
 import { UpdateEmergencyRequestDto } from './dto/update-emergency-request.dto';
 import { UpdateStatusDto } from './dto/update-status.dto';
 import { AssignEmergencyRequestDto } from './dto/assign-emergency-request.dto';
+import { DispatchEmergencyRequestDto } from './dto/dispatch-emergency-request.dto';
+import { CancelEmergencyRequestDto } from './dto/cancel-emergency-request.dto';
+import { FindEmergencyRequestsQueryDto } from './dto/find-emergency-requests-query.dto';
 
 @Controller('emergency-requests')
 export class EmergencyRequestController {
@@ -25,8 +29,8 @@ export class EmergencyRequestController {
   }
 
   @Get()
-  findAll() {
-    return this.emergencyRequestService.findAll();
+  findAll(@Query() query: FindEmergencyRequestsQueryDto) {
+    return this.emergencyRequestService.findAll(query);
   }
 
   @Get(':id')
@@ -35,9 +39,25 @@ export class EmergencyRequestController {
   }
 
   @Patch(':id/assign')
-assign(@Param('id') id: string, @Body() dto: AssignEmergencyRequestDto) {
-  return this.emergencyRequestService.assign(id, dto);
-}
+  assign(@Param('id') id: string, @Body() dto: AssignEmergencyRequestDto) {
+    return this.emergencyRequestService.assign(id, dto);
+  }
+
+  @Patch(':id/dispatch')
+  dispatch(
+    @Param('id') id: string,
+    @Body() dto: DispatchEmergencyRequestDto,
+  ) {
+    return this.emergencyRequestService.dispatch(id, dto);
+  }
+
+  @Patch(':id/cancel')
+  cancel(
+    @Param('id') id: string,
+    @Body() dto: CancelEmergencyRequestDto,
+  ) {
+    return this.emergencyRequestService.cancel(id, dto);
+  }
 
   @Patch(':id')
   update(@Param('id') id: string, @Body() dto: UpdateEmergencyRequestDto) {

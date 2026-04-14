@@ -6,10 +6,12 @@ import {
   Param,
   Patch,
   Post,
+  Query,
 } from '@nestjs/common';
 import { HospitalService } from './hospital.service';
 import { CreateHospitalDto } from './dto/create-hospital.dto';
 import { UpdateHospitalDto } from './dto/update-hospital.dto';
+import { FindHospitalsQueryDto } from './dto/find-hospitals-query.dto';
 
 @Controller('hospitals')
 export class HospitalController {
@@ -21,8 +23,8 @@ export class HospitalController {
   }
 
   @Get()
-  findAll() {
-    return this.hospitalService.findAll();
+  findAll(@Query() query: FindHospitalsQueryDto) {
+    return this.hospitalService.findAll(query);
   }
 
   @Get(':id')

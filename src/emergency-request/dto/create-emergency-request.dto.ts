@@ -2,6 +2,7 @@ import {
   ArrayMaxSize,
   ArrayMinSize,
   IsArray,
+  IsMongoId,
   IsNotEmpty,
   IsOptional,
   IsString,
@@ -26,6 +27,6 @@ export class CreateEmergencyRequestDto {
   notes?: string;
 
   @IsOptional()
-  @IsString()
+  @IsMongoId()
   assignedHospital?: string;
 }

@@ -15,8 +15,19 @@ import {
   Ambulance,
   AmbulanceDocument,
 } from '../ambulance/entities/ambulance.entity';
-import { AmbulanceStatus, EmergencyRequestStatus } from '../constants/enums';
+import {
+  AmbulanceStatus,
+  EmergencyRequestStatus,
+  HospitalAssignmentTechnique,
+} from '../constants/enums';
 import { AssignEmergencyRequestDto } from './dto/assign-emergency-request.dto';
+import {
+  Hospital,
+  HospitalDocument,
+} from '../hospital/entities/hospital.entity';
+import { DispatchEmergencyRequestDto } from './dto/dispatch-emergency-request.dto';
+import { CancelEmergencyRequestDto } from './dto/cancel-emergency-request.dto';
+import { FindEmergencyRequestsQueryDto } from './dto/find-emergency-requests-query.dto';
 
 @Injectable()
 export class EmergencyRequestService {
@@ -31,6 +42,7 @@ export class EmergencyRequestService {
     [EmergencyRequestStatus.TRANSPORTING]: [EmergencyRequestStatus.AT_HOSPITAL],
     [EmergencyRequestStatus.AT_HOSPITAL]: [EmergencyRequestStatus.COMPLETED],
     [EmergencyRequestStatus.COMPLETED]: [EmergencyRequestStatus.PENDING],
+    [EmergencyRequestStatus.CANCELLED]: [],
   };
 
   constructor(
@@ -38,13 +50,12 @@ export class EmergencyRequestService {
     private readonly emergencyRequestModel: Model<EmergencyRequestDocument>,
     @InjectModel(Ambulance.name)
     private readonly ambulanceModel: Model<AmbulanceDocument>,
+    @InjectModel(Hospital.name)
+    private readonly hospitalModel: Model<HospitalDocument>,
   ) {}
 
   async create(createDto: CreateEmergencyRequestDto) {
     const { coordinates, assignedHospital, ...rest } = createDto;
-
-    const nearestAmbulance =
-      await this.findNearestAvailableAmbulance(coordinates);
 
     const requestData: Partial<EmergencyRequest> & {
       pickupLocation: { type: 'Point'; coordinates: [number, number] };
@@ -56,22 +67,45 @@ export class EmergencyRequestService {
       },
       status: EmergencyRequestStatus.PENDING,
       assignedAmbulance: null,
-      assignedHospital: assignedHospital
-        ? new Types.ObjectId(assignedHospital)
-        : null,
+      assignedHospital: null,
       assignedAt: null,
       reachedPatientAt: null,
       completedAt: null,
+      cancelledAt: null,
+      cancellationReason: '',
     };
+
+    if (assignedHospital) {
+      const hospital = await this.findValidHospitalById(assignedHospital);
+      requestData.assignedHospital = hospital._id as Types.ObjectId;
+      requestData.hospitalAssignmentTechnique =
+        HospitalAssignmentTechnique.USER_CHOICE;
+    }
+
+    const assignedAt = new Date();
+    const nearestAmbulance = await this.claimNearestAvailableAmbulance(
+      coordinates,
+      assignedAt,
+    );
 
     if (nearestAmbulance) {
       requestData.assignedAmbulance = nearestAmbulance._id as Types.ObjectId;
       requestData.status = EmergencyRequestStatus.ASSIGNED;
-      requestData.assignedAt = new Date();
+      requestData.assignedAt = assignedAt;
 
-      nearestAmbulance.status = AmbulanceStatus.ASSIGNED;
-      nearestAmbulance.assignedAt = new Date();
-      await nearestAmbulance.save();
+      if (!requestData.assignedHospital) {
+        const nearestHospital =
+          await this.findNearestValidHospital(coordinates);
+
+        if (!nearestHospital) {
+          await this.releaseAmbulance(nearestAmbulance._id as Types.ObjectId);
+          throw new NotFoundException('No available hospital found');
+        }
+
+        requestData.assignedHospital = nearestHospital._id as Types.ObjectId;
+        requestData.hospitalAssignmentTechnique =
+          HospitalAssignmentTechnique.SYSTEM_AUTO;
+      }
     }
 
     const created = await this.emergencyRequestModel.create(requestData);
@@ -79,9 +113,37 @@ export class EmergencyRequestService {
     return this.findOne(created.id);
   }
 
-  async findAll() {
+  async findAll(query: FindEmergencyRequestsQueryDto = {}) {
+    const filter: Record<string, unknown> = {};
+
+    if (query.status) {
+      filter.status = query.status;
+    }
+
+    if (query.assignedAmbulance) {
+      filter.assignedAmbulance = new Types.ObjectId(query.assignedAmbulance);
+    }
+
+    if (query.assignedHospital) {
+      filter.assignedHospital = new Types.ObjectId(query.assignedHospital);
+    }
+
+    if (query.hospitalAssignmentTechnique) {
+      filter.hospitalAssignmentTechnique = query.hospitalAssignmentTechnique;
+    }
+
+    if (query.search) {
+      const regex = new RegExp(this.escapeRegex(query.search), 'i');
+      filter.$or = [
+        { patientName: regex },
+        { patientPhone: regex },
+        { notes: regex },
+        { cancellationReason: regex },
+      ];
+    }
+
     return this.emergencyRequestModel
-      .find()
+      .find(filter)
       .populate('assignedAmbulance')
       .populate('assignedHospital')
       .sort({ createdAt: -1 });
@@ -123,9 +185,10 @@ export class EmergencyRequestService {
     }
 
     if (dto.assignedHospital !== undefined) {
-      request.assignedHospital = dto.assignedHospital
-        ? new Types.ObjectId(dto.assignedHospital)
-        : null;
+      const hospital = await this.findValidHospitalById(dto.assignedHospital);
+      request.assignedHospital = hospital._id as Types.ObjectId;
+      request.hospitalAssignmentTechnique =
+        HospitalAssignmentTechnique.USER_CHOICE;
     }
 
     if (dto.notes !== undefined) {
@@ -135,6 +198,78 @@ export class EmergencyRequestService {
     const updated = await request.save();
 
     return this.findOne(updated.id);
+  }
+
+  async dispatch(id: string, dto: DispatchEmergencyRequestDto) {
+    const request = await this.emergencyRequestModel.findById(id);
+
+    if (!request) {
+      throw new NotFoundException('Emergency request not found');
+    }
+
+    this.assertRequestNotDispatched(request);
+
+    const hospital = await this.resolveHospitalForDispatch(
+      dto,
+      request.pickupLocation.coordinates,
+    );
+
+    const assignedAt = new Date();
+    const ambulance = dto.ambulanceId
+      ? await this.claimAvailableAmbulanceById(dto.ambulanceId, assignedAt)
+      : await this.claimNearestAvailableAmbulance(
+          request.pickupLocation.coordinates,
+          assignedAt,
+        );
+
+    if (!ambulance) {
+      throw new NotFoundException('No available ambulance found');
+    }
+
+    request.assignedAmbulance = ambulance._id as Types.ObjectId;
+    request.assignedHospital = hospital._id as Types.ObjectId;
+    request.hospitalAssignmentTechnique = dto.hospitalAssignmentTechnique;
+    request.status = EmergencyRequestStatus.ASSIGNED;
+    request.assignedAt = assignedAt;
+
+    if (dto.notes !== undefined) {
+      request.notes = dto.notes;
+    }
+
+    await request.save();
+
+    return this.findOne(request.id);
+  }
+
+  async cancel(id: string, dto: CancelEmergencyRequestDto) {
+    const request = await this.emergencyRequestModel.findById(id);
+
+    if (!request) {
+      throw new NotFoundException('Emergency request not found');
+    }
+
+    if (request.status === EmergencyRequestStatus.CANCELLED) {
+      throw new BadRequestException('Emergency request is already cancelled');
+    }
+
+    if (request.status === EmergencyRequestStatus.COMPLETED) {
+      throw new BadRequestException('Completed emergency request cannot be cancelled');
+    }
+
+    if (request.assignedAmbulance) {
+      await this.releaseAmbulance(request.assignedAmbulance);
+    }
+
+    request.status = EmergencyRequestStatus.CANCELLED;
+    request.cancelledAt = new Date();
+
+    if (dto.reason !== undefined) {
+      request.cancellationReason = dto.reason;
+    }
+
+    await request.save();
+
+    return this.findOne(request.id);
   }
 
   async assign(id: string, dto: AssignEmergencyRequestDto) {
@@ -151,18 +286,14 @@ export class EmergencyRequestService {
         throw new BadRequestException('Invalid ambulance id');
       }
 
-      ambulance = await this.ambulanceModel.findById(dto.ambulanceId);
-
-      if (!ambulance) {
-        throw new NotFoundException('Ambulance not found');
-      }
-
-      if (ambulance.status !== AmbulanceStatus.AVAILABLE) {
-        throw new BadRequestException('Selected ambulance is not available');
-      }
+      ambulance = await this.claimAvailableAmbulanceById(
+        dto.ambulanceId,
+        new Date(),
+      );
     } else {
-      ambulance = await this.findNearestAvailableAmbulance(
+      ambulance = await this.claimNearestAvailableAmbulance(
         request.pickupLocation.coordinates,
+        new Date(),
       );
 
       if (!ambulance) {
@@ -176,33 +307,26 @@ export class EmergencyRequestService {
       );
 
       if (previousAmbulance && previousAmbulance.id !== ambulance.id) {
-        previousAmbulance.status = AmbulanceStatus.AVAILABLE;
-        previousAmbulance.assignedAt = null;
-        previousAmbulance.reachedPatientAt = null;
-        previousAmbulance.transportStartedAt = null;
-        previousAmbulance.reachedHospitalAt = null;
-        previousAmbulance.completedAt = null;
-        await previousAmbulance.save();
+        await this.releaseAmbulance(previousAmbulance._id as Types.ObjectId);
       }
     }
 
+    const assignedAt = ambulance.assignedAt ?? new Date();
+
     request.assignedAmbulance = ambulance._id as Types.ObjectId;
     request.status = EmergencyRequestStatus.ASSIGNED;
-    request.assignedAt = new Date();
+    request.assignedAt = assignedAt;
 
     if (dto.hospitalId !== undefined) {
-      request.assignedHospital = dto.hospitalId
-        ? new Types.ObjectId(dto.hospitalId)
-        : null;
+      const hospital = await this.findValidHospitalById(dto.hospitalId);
+      request.assignedHospital = hospital._id as Types.ObjectId;
+      request.hospitalAssignmentTechnique =
+        HospitalAssignmentTechnique.USER_CHOICE;
     }
 
     if (dto.notes !== undefined) {
       request.notes = dto.notes;
     }
-
-    ambulance.status = AmbulanceStatus.ASSIGNED;
-    ambulance.assignedAt = new Date();
-    await ambulance.save();
 
     await request.save();
 
@@ -259,13 +383,7 @@ export class EmergencyRequestService {
       );
 
       if (ambulance) {
-        ambulance.status = AmbulanceStatus.AVAILABLE;
-        ambulance.assignedAt = null;
-        ambulance.reachedPatientAt = null;
-        ambulance.transportStartedAt = null;
-        ambulance.reachedHospitalAt = null;
-        ambulance.completedAt = null;
-        await ambulance.save();
+        await this.releaseAmbulance(ambulance._id as Types.ObjectId);
       }
     }
 
@@ -289,6 +407,206 @@ export class EmergencyRequestService {
         },
       },
     });
+  }
+
+  private escapeRegex(value: string) {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  private async claimNearestAvailableAmbulance(
+    coordinates: [number, number],
+    assignedAt: Date,
+  ): Promise<AmbulanceDocument | null> {
+    const candidates = await this.ambulanceModel
+      .find({
+        isActive: true,
+        status: AmbulanceStatus.AVAILABLE,
+        currentLocation: {
+          $near: {
+            $geometry: {
+              type: 'Point',
+              coordinates,
+            },
+          },
+        },
+      })
+      .limit(20);
+
+    for (const candidate of candidates) {
+      const claimed = await this.ambulanceModel.findOneAndUpdate(
+        {
+          _id: candidate._id,
+          isActive: true,
+          status: AmbulanceStatus.AVAILABLE,
+        },
+        {
+          $set: {
+            status: AmbulanceStatus.ASSIGNED,
+            assignedAt,
+          },
+        },
+        { new: true },
+      );
+
+      if (claimed) {
+        return claimed;
+      }
+    }
+
+    return null;
+  }
+
+  private async findAvailableAmbulanceById(
+    ambulanceId: string,
+  ): Promise<AmbulanceDocument> {
+    if (!isValidObjectId(ambulanceId)) {
+      throw new BadRequestException('Invalid ambulance id');
+    }
+
+    const ambulance = await this.ambulanceModel.findById(ambulanceId);
+
+    if (!ambulance) {
+      throw new NotFoundException('Ambulance not found');
+    }
+
+    if (
+      !ambulance.isActive ||
+      ambulance.status !== AmbulanceStatus.AVAILABLE
+    ) {
+      throw new BadRequestException('Selected ambulance is not available');
+    }
+
+    return ambulance;
+  }
+
+  private async claimAvailableAmbulanceById(
+    ambulanceId: string,
+    assignedAt: Date,
+  ): Promise<AmbulanceDocument> {
+    if (!isValidObjectId(ambulanceId)) {
+      throw new BadRequestException('Invalid ambulance id');
+    }
+
+    const ambulance = await this.ambulanceModel.findById(ambulanceId);
+
+    if (!ambulance) {
+      throw new NotFoundException('Ambulance not found');
+    }
+
+    const claimed = await this.ambulanceModel.findOneAndUpdate(
+      {
+        _id: ambulance._id,
+        isActive: true,
+        status: AmbulanceStatus.AVAILABLE,
+      },
+      {
+        $set: {
+          status: AmbulanceStatus.ASSIGNED,
+          assignedAt,
+        },
+      },
+      { new: true },
+    );
+
+    if (!claimed) {
+      throw new BadRequestException('Selected ambulance is not available');
+    }
+
+    return claimed;
+  }
+
+  private async releaseAmbulance(ambulanceId: Types.ObjectId) {
+    const ambulance = await this.ambulanceModel.findById(ambulanceId);
+
+    if (!ambulance) {
+      return;
+    }
+
+    ambulance.status = AmbulanceStatus.AVAILABLE;
+    ambulance.assignedAt = null;
+    ambulance.reachedPatientAt = null;
+    ambulance.transportStartedAt = null;
+    ambulance.reachedHospitalAt = null;
+    ambulance.completedAt = null;
+
+    await ambulance.save();
+  }
+
+  private async findNearestValidHospital(
+    coordinates: [number, number],
+  ): Promise<HospitalDocument | null> {
+    return this.hospitalModel.findOne({
+      status: 'available',
+      availableBeds: { $gt: 0 },
+      location: {
+        $near: {
+          $geometry: {
+            type: 'Point',
+            coordinates,
+          },
+        },
+      },
+    });
+  }
+
+  private async findValidHospitalById(
+    hospitalId: string,
+  ): Promise<HospitalDocument> {
+    if (!isValidObjectId(hospitalId)) {
+      throw new BadRequestException('Invalid hospital id');
+    }
+
+    const hospital = await this.hospitalModel.findById(hospitalId);
+
+    if (!hospital) {
+      throw new NotFoundException('Hospital not found');
+    }
+
+    if (hospital.status !== 'available' || hospital.availableBeds <= 0) {
+      throw new BadRequestException('Selected hospital is not available');
+    }
+
+    return hospital;
+  }
+
+  private assertRequestNotDispatched(request: EmergencyRequestDocument) {
+    if (
+      request.status !== EmergencyRequestStatus.PENDING ||
+      request.assignedAmbulance ||
+      request.assignedHospital
+    ) {
+      throw new BadRequestException('Emergency request is already dispatched');
+    }
+  }
+
+  private async resolveHospitalForDispatch(
+    dto: DispatchEmergencyRequestDto,
+    coordinates: [number, number],
+  ): Promise<HospitalDocument> {
+    if (
+      dto.hospitalAssignmentTechnique ===
+      HospitalAssignmentTechnique.SYSTEM_AUTO
+    ) {
+      if (dto.hospitalId) {
+        throw new BadRequestException(
+          'hospitalId is not allowed for system-auto assignment',
+        );
+      }
+
+      const hospital = await this.findNearestValidHospital(coordinates);
+
+      if (!hospital) {
+        throw new NotFoundException('No available hospital found');
+      }
+
+      return hospital;
+    }
+
+    if (!dto.hospitalId) {
+      throw new BadRequestException('hospitalId is required');
+    }
+
+    return this.findValidHospitalById(dto.hospitalId);
   }
 
   private async syncAssignedAmbulanceStatus(
@@ -334,6 +652,15 @@ export class EmergencyRequestService {
     if (requestStatus === EmergencyRequestStatus.COMPLETED) {
       ambulance.status = AmbulanceStatus.COMPLETED;
       ambulance.completedAt = request.completedAt ?? new Date();
+    }
+
+    if (requestStatus === EmergencyRequestStatus.CANCELLED) {
+      ambulance.status = AmbulanceStatus.AVAILABLE;
+      ambulance.assignedAt = null;
+      ambulance.reachedPatientAt = null;
+      ambulance.transportStartedAt = null;
+      ambulance.reachedHospitalAt = null;
+      ambulance.completedAt = null;
     }
 
     if (requestStatus === EmergencyRequestStatus.PENDING) {
