@@ -9,6 +9,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
 import { GatewayModule } from './gateway/gateway.module';
 import { DashboardModule } from './dashboard/dashboard.module';
+import { RoutesModule } from './routes/routes.module';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { DashboardModule } from './dashboard/dashboard.module';
     HospitalModule,
     EmergencyRequestModule,
     DashboardModule,
+    RoutesModule,
     GatewayModule,
   ],
   controllers: [AppController],
