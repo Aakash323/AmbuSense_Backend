@@ -9,6 +9,7 @@ import {
   EmergencyRequestSchema,
 } from '../emergency-request/entities/emergency-request.entity';
 import { Hospital, HospitalSchema } from '../hospital/entities/hospital.entity';
+import { AuthModule } from '../auth/auth.module';
 import { DashboardController } from './dashboard.controller';
 import { DashboardService } from './dashboard.service';
 
@@ -19,6 +20,7 @@ import { DashboardService } from './dashboard.service';
       { name: Ambulance.name, schema: AmbulanceSchema },
       { name: Hospital.name, schema: HospitalSchema },
     ]),
+    AuthModule,
   ],
   controllers: [DashboardController],
   providers: [DashboardService],

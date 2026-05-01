@@ -1,0 +1,307 @@
+import {
+  BadRequestException,
+  ForbiddenException,
+  HttpException,
+  InternalServerErrorException,
+  Injectable,
+  OnModuleDestroy,
+  OnModuleInit,
+  UnauthorizedException,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import type { Request, Response as ExpressResponse } from 'express';
+import { MongoClient, ObjectId } from 'mongodb';
+import { Types } from 'mongoose';
+import { UserRole } from '../constants/enums';
+import { RoleProfilesService } from '../role-profiles/role-profiles.service';
+import { UserDocument } from '../users/entities/user.entity';
+import { UsersService } from '../users/users.service';
+import { AmbuSenseAuth, createBetterAuth } from './better-auth.provider';
+import { LoginDto } from './dto/login.dto';
+import { SignupDto } from './dto/signup.dto';
+
+type AuthUserPayload = {
+  id: string;
+};
+
+type BetterAuthUserRecord = {
+  _id: string | ObjectId;
+};
+
+@Injectable()
+export class AuthService implements OnModuleInit, OnModuleDestroy {
+  private auth?: AmbuSenseAuth;
+  private mongoClient?: MongoClient;
+
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly usersService: UsersService,
+    private readonly roleProfilesService: RoleProfilesService,
+  ) {}
+
+  async onModuleInit() {
+    const { auth, client } = await createBetterAuth(this.configService);
+    this.auth = auth;
+    this.mongoClient = client;
+  }
+
+  async onModuleDestroy() {
+    await this.mongoClient?.close();
+  }
+
+  async signup(dto: SignupDto, req: Request, res: ExpressResponse) {
+    if (dto.role !== UserRole.PATIENT) {
+      throw new BadRequestException(
+        'Public signup is only available for patients',
+      );
+    }
+
+    return this.createUserWithProfile(dto, req, res, true);
+  }
+
+  async createStaff(dto: SignupDto, req: Request) {
+    if (dto.role === UserRole.PATIENT) {
+      throw new BadRequestException(
+        'Use public signup to create patient users',
+      );
+    }
+
+    return this.createUserWithProfile(dto, req, undefined, false);
+  }
+
+  private async createUserWithProfile(
+    dto: SignupDto,
+    req: Request,
+    res: ExpressResponse | undefined,
+    copyCookies: boolean,
+  ) {
+    const authResponse = await this.getAuth().api.signUpEmail({
+      body: {
+        name: dto.fullName,
+        email: dto.email,
+        password: dto.password,
+        phone: dto.phone,
+        role: dto.role,
+      },
+      headers: this.headersFromRequest(req, copyCookies),
+      asResponse: true,
+    } as never);
+    const payload = await this.readAuthResponse(authResponse);
+
+    this.assertAuthResponseOk(authResponse, payload);
+
+    const authUser = this.getAuthUserPayload(payload);
+    const { user, profile } = await this.createSignupProfile(authUser.id);
+
+    if (copyCookies && res) {
+      this.copyAuthHeaders(authResponse, res);
+    }
+
+    return {
+      user: this.usersService.sanitize(user),
+      profile,
+    };
+  }
+
+  async login(dto: LoginDto, req: Request, res: ExpressResponse) {
+    const existingUser = await this.usersService.findByEmail(dto.email);
+
+    if (existingUser && !existingUser.isActive) {
+      throw new ForbiddenException('User is inactive');
+    }
+
+    const authResponse = await this.getAuth().api.signInEmail({
+      body: {
+        email: dto.email,
+        password: dto.password,
+        rememberMe: dto.rememberMe,
+      },
+      headers: this.headersFromRequest(req),
+      asResponse: true,
+    } as never);
+    const payload = await this.readAuthResponse(authResponse);
+
+    this.assertAuthResponseOk(authResponse, payload);
+
+    const authUser = this.getAuthUserPayload(payload);
+    const user = await this.usersService.updateLastLoginAt(authUser.id);
+    const profile = await this.roleProfilesService.findByUser(
+      user.role as UserRole,
+      user._id as Types.ObjectId,
+    );
+
+    this.copyAuthHeaders(authResponse, res);
+
+    return {
+      user: this.usersService.sanitize(user),
+      profile,
+    };
+  }
+
+  async me(user: UserDocument | undefined) {
+    if (!user) {
+      throw new UnauthorizedException('Not authenticated');
+    }
+
+    if (!user.isActive) {
+      throw new ForbiddenException('User is inactive');
+    }
+
+    const profile = await this.roleProfilesService.findByUser(
+      user.role as UserRole,
+      user._id as Types.ObjectId,
+    );
+
+    return {
+      user: this.usersService.sanitize(user),
+      profile,
+    };
+  }
+
+  async getCurrentUser(req: Request): Promise<UserDocument> {
+    const session = await this.getAuth().api.getSession({
+      headers: this.headersFromRequest(req),
+    });
+
+    if (!session?.user?.id) {
+      throw new UnauthorizedException('Not authenticated');
+    }
+
+    const user = await this.usersService.requireById(session.user.id);
+
+    if (!user.isActive) {
+      throw new ForbiddenException('User is inactive');
+    }
+
+    return user;
+  }
+
+  private async createSignupProfile(authUserId: string) {
+    try {
+      const user = await this.usersService.requireById(authUserId);
+      const profile = await this.roleProfilesService.createForRole(
+        user.role as UserRole,
+        user._id as Types.ObjectId,
+      );
+
+      return { user, profile };
+    } catch (error) {
+      try {
+        await this.cleanupAuthUser(authUserId);
+      } catch (cleanupError) {
+        throw new InternalServerErrorException(
+          'Signup failed and auth cleanup did not complete',
+          { cause: cleanupError },
+        );
+      }
+
+      throw new InternalServerErrorException(
+        'Signup failed while creating role profile',
+        { cause: error },
+      );
+    }
+  }
+
+  private async cleanupAuthUser(authUserId: string) {
+    if (!this.mongoClient) {
+      return;
+    }
+
+    const databaseName = this.configService.get<string>('MONGODB_DB_NAME');
+    const db = this.mongoClient.db(databaseName);
+    const userId = ObjectId.isValid(authUserId)
+      ? new ObjectId(authUserId)
+      : authUserId;
+
+    await Promise.all([
+      db.collection('session').deleteMany({ userId }),
+      db.collection('account').deleteMany({ userId }),
+      db.collection<BetterAuthUserRecord>('users').deleteOne({ _id: userId }),
+    ]);
+  }
+
+  private getAuth(): AmbuSenseAuth {
+    if (!this.auth) {
+      throw new Error('Better Auth has not been initialized');
+    }
+
+    return this.auth;
+  }
+
+  private headersFromRequest(req: Request, includeCookies = true): Headers {
+    const headers = new Headers();
+
+    for (const [key, value] of Object.entries(req.headers)) {
+      if (!includeCookies && key.toLowerCase() === 'cookie') {
+        continue;
+      }
+
+      if (Array.isArray(value)) {
+        value.forEach((item) => headers.append(key, item));
+      } else if (value !== undefined) {
+        headers.set(key, value);
+      }
+    }
+
+    return headers;
+  }
+
+  private copyAuthHeaders(authResponse: Response, res: ExpressResponse) {
+    const getSetCookie = (
+      authResponse.headers as Headers & {
+        getSetCookie?: () => string[];
+      }
+    ).getSetCookie;
+    const cookies = getSetCookie
+      ? getSetCookie.call(authResponse.headers)
+      : authResponse.headers.get('set-cookie')
+        ? [authResponse.headers.get('set-cookie') as string]
+        : [];
+
+    for (const cookie of cookies) {
+      res.append('Set-Cookie', cookie);
+    }
+  }
+
+  private async readAuthResponse(authResponse: Response) {
+    const text = await authResponse.text();
+
+    if (!text) {
+      return {};
+    }
+
+    try {
+      return JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      return {};
+    }
+  }
+
+  private getAuthUserPayload(
+    payload: Record<string, unknown>,
+  ): AuthUserPayload {
+    const user = payload.user as Partial<AuthUserPayload> | undefined;
+
+    if (!user?.id) {
+      throw new UnauthorizedException('Authentication failed');
+    }
+
+    return { id: user.id };
+  }
+
+  private assertAuthResponseOk(
+    authResponse: Response,
+    payload: Record<string, unknown>,
+  ) {
+    if (authResponse.ok) {
+      return;
+    }
+
+    const message =
+      typeof payload.message === 'string'
+        ? payload.message
+        : 'Authentication failed';
+
+    throw new HttpException(message, authResponse.status);
+  }
+}
