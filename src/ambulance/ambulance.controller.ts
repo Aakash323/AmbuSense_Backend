@@ -63,10 +63,22 @@ export class AmbulanceController {
     example: AmbulanceStatus.AVAILABLE,
   })
   @ApiQuery({ name: 'isActive', required: false, example: true })
+  @ApiQuery({ name: 'page', required: false, example: 1 })
+  @ApiQuery({ name: 'limit', required: false, example: 10 })
   @ApiResponse({
     status: 200,
     description: 'Matching ambulances.',
-    schema: { example: [ambulanceExample] },
+    schema: {
+      example: {
+        data: [ambulanceExample],
+        meta: {
+          page: 1,
+          limit: 10,
+          total: 1,
+          totalPages: 1,
+        },
+      },
+    },
   })
   findAll(@Query() query: FindAmbulancesQueryDto) {
     return this.ambulanceService.findAll(query);

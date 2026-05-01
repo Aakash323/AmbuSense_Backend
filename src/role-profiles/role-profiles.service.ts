@@ -7,6 +7,10 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { UserRole } from '../constants/enums';
+import {
+  Ambulance,
+  AmbulanceDocument,
+} from '../ambulance/entities/ambulance.entity';
 import { Admin, AdminDocument } from './entities/admin.entity';
 import { Dispatcher, DispatcherDocument } from './entities/dispatcher.entity';
 import { Driver, DriverDocument } from './entities/driver.entity';
@@ -28,6 +32,8 @@ export class RoleProfilesService {
     private readonly driverModel: Model<DriverDocument>,
     @InjectModel(Patient.name)
     private readonly patientModel: Model<PatientDocument>,
+    @InjectModel(Ambulance.name)
+    private readonly ambulanceModel: Model<AmbulanceDocument>,
   ) {}
 
   async createForRole(role: UserRole, user: Types.ObjectId) {
@@ -56,7 +62,32 @@ export class RoleProfilesService {
       .sort({ updatedAt: -1, createdAt: -1 })
       .exec();
 
-    return profiles.map((profile) => this.sanitizeDriverForAdmin(profile));
+    const phones = profiles
+      .map((profile) => {
+        const user = profile.user as unknown as { phone?: string };
+        return user.phone;
+      })
+      .filter((phone): phone is string => Boolean(phone));
+
+    const ambulances = await this.ambulanceModel
+      .find({ phone: { $in: phones } })
+      .sort({ updatedAt: -1, createdAt: -1 })
+      .exec();
+
+    const ambulanceByPhone = new Map<string, AmbulanceDocument>();
+    ambulances.forEach((ambulance) => {
+      if (!ambulanceByPhone.has(ambulance.phone)) {
+        ambulanceByPhone.set(ambulance.phone, ambulance);
+      }
+    });
+
+    return profiles.map((profile) => {
+      const user = profile.user as unknown as { phone?: string };
+      return this.sanitizeDriverForAdmin(
+        profile,
+        user.phone ? ambulanceByPhone.get(user.phone) : null,
+      );
+    });
   }
 
   async assertDriverVerified(user: string | Types.ObjectId) {
@@ -181,7 +212,10 @@ export class RoleProfilesService {
     return sanitized;
   }
 
-  private sanitizeDriverForAdmin(profile: DriverDocument) {
+  private sanitizeDriverForAdmin(
+    profile: DriverDocument,
+    assignedAmbulance?: AmbulanceDocument | null,
+  ) {
     const user = profile.user as unknown as {
       _id: Types.ObjectId;
       fullName: string;
@@ -227,8 +261,24 @@ export class RoleProfilesService {
             uploadedBy: media.uploadedBy.toString(),
           }
         : null,
+      assignedAmbulance: assignedAmbulance
+        ? {
+            id: assignedAmbulance._id.toString(),
+            ambulanceCode: assignedAmbulance.ambulanceCode,
+            driverName: assignedAmbulance.driverName,
+            phone: assignedAmbulance.phone,
+            status: assignedAmbulance.status,
+            currentLocation: assignedAmbulance.currentLocation,
+            isActive: assignedAmbulance.isActive,
+            assignedAt: assignedAmbulance.assignedAt,
+            createdAt: assignedAmbulance.createdAt,
+            updatedAt: assignedAmbulance.updatedAt,
+          }
+        : null,
       isVerified: profile.isVerified,
       verificationNote: profile.verificationNote,
+      createdAt: profile.createdAt,
+      updatedAt: profile.updatedAt,
     };
   }
 }

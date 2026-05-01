@@ -21,6 +21,9 @@ export class Driver {
 
   @Prop({ type: String, trim: true, default: null })
   verificationNote!: string | null;
+
+  createdAt!: Date;
+  updatedAt!: Date;
 }
 
 export const DriverSchema = SchemaFactory.createForClass(Driver);

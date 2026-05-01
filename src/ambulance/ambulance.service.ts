@@ -108,8 +108,10 @@ export class AmbulanceService implements OnModuleInit {
       filter.status = query.status;
     }
 
-    if (query.isActive !== undefined) {
-      filter.isActive = query.isActive;
+    const isActive = this.parseBooleanQuery(query.isActive);
+
+    if (isActive !== undefined) {
+      filter.isActive = isActive;
     }
 
     if (query.search) {
@@ -121,7 +123,28 @@ export class AmbulanceService implements OnModuleInit {
       ];
     }
 
-    return this.ambulanceModel.find(filter).sort({ createdAt: -1 });
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 10;
+    const skip = (page - 1) * limit;
+    const [data, total] = await Promise.all([
+      this.ambulanceModel
+        .find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .exec(),
+      this.ambulanceModel.countDocuments(filter).exec(),
+    ]);
+
+    return {
+      data,
+      meta: {
+        page,
+        limit,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
+      },
+    };
   }
 
   async findOne(id: string) {
@@ -259,6 +282,22 @@ export class AmbulanceService implements OnModuleInit {
 
   private escapeRegex(value: string) {
     return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  private parseBooleanQuery(value: boolean | string | undefined) {
+    if (value === undefined) {
+      return undefined;
+    }
+
+    if (value === true || value === 'true') {
+      return true;
+    }
+
+    if (value === false || value === 'false') {
+      return false;
+    }
+
+    return undefined;
   }
 
   private async assertDriverCanAccessAmbulance(
