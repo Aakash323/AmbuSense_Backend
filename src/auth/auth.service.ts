@@ -50,9 +50,9 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
   }
 
   async signup(dto: SignupDto, req: Request, res: ExpressResponse) {
-    if (dto.role !== UserRole.PATIENT) {
+    if (![UserRole.PATIENT, UserRole.DRIVER].includes(dto.role)) {
       throw new BadRequestException(
-        'Public signup is only available for patients',
+        'Public signup is only available for patients and drivers',
       );
     }
 

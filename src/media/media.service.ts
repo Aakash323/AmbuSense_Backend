@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Media, MediaDocument } from './entities/media.entity';
@@ -22,6 +22,20 @@ export class MediaService {
 
   async create(input: CreateMediaInput) {
     const media = await this.mediaModel.create(input);
+    return this.sanitize(media);
+  }
+
+  async findById(id: string) {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new BadRequestException('Invalid media id');
+    }
+
+    const media = await this.mediaModel.findById(id);
+
+    if (!media) {
+      throw new NotFoundException('Media not found');
+    }
+
     return this.sanitize(media);
   }
 

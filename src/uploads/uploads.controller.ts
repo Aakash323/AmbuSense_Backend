@@ -2,6 +2,8 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Get,
+  Param,
   Post,
   UploadedFile,
   UseGuards,
@@ -41,6 +43,12 @@ const allowedImageMimeTypes = new Set([
 @UseGuards(AuthGuard, RolesGuard)
 export class UploadsController {
   constructor(private readonly uploadsService: UploadsService) {}
+
+  @Get('media/:id')
+  @Roles(UserRole.ADMIN, UserRole.DISPATCHER, UserRole.DRIVER, UserRole.PATIENT)
+  getMedia(@Param('id') id: string) {
+    return this.uploadsService.findMediaById(id);
+  }
 
   @Post('driver-document')
   @Roles(UserRole.DRIVER, UserRole.ADMIN)

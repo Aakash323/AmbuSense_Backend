@@ -51,6 +51,10 @@ export class UploadsService {
     };
   }
 
+  findMediaById(id: string) {
+    return this.mediaService.findById(id);
+  }
+
   private async attachAdminUploadedDocument(
     dto: UploadDriverDocumentDto,
     mediaId: string,
