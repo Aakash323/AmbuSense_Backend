@@ -135,6 +135,9 @@ async function bootstrap() {
   const PORT = configService.get<number>('PORT') ?? 4001;
   await app.listen(PORT, '0.0.0.0');
   console.log(`API running on http://localhost:${PORT}/api`);
+  if (NODE_ENV !== 'production' && process.env.SWAGGER_PASSWORD) {
+    console.log(`Swagger docs: http://localhost:${PORT}/api/docs`);
+  }
 }
 
 void bootstrap();
