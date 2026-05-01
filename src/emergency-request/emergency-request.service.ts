@@ -21,6 +21,7 @@ import {
   AmbulanceStatus,
   EmergencyRequestStatus,
   HospitalAssignmentTechnique,
+  UserRole,
 } from '../constants/enums';
 import { AssignEmergencyRequestDto } from './dto/assign-emergency-request.dto';
 import {
@@ -31,6 +32,8 @@ import { DispatchEmergencyRequestDto } from './dto/dispatch-emergency-request.dt
 import { CancelEmergencyRequestDto } from './dto/cancel-emergency-request.dto';
 import { FindEmergencyRequestsQueryDto } from './dto/find-emergency-requests-query.dto';
 import { TrackingGateway } from '../gateway/tracking.gateway';
+import { UserDocument } from '../users/entities/user.entity';
+import { RoleProfilesService } from '../role-profiles/role-profiles.service';
 
 @Injectable()
 export class EmergencyRequestService implements OnModuleInit {
@@ -58,6 +61,7 @@ export class EmergencyRequestService implements OnModuleInit {
     @InjectModel(Hospital.name)
     private readonly hospitalModel: Model<HospitalDocument>,
     private readonly moduleRef: ModuleRef,
+    private readonly roleProfilesService: RoleProfilesService,
   ) {}
 
   onModuleInit() {
@@ -86,7 +90,10 @@ export class EmergencyRequestService implements OnModuleInit {
     this.trackingGateway?.emitEmergencyRequestDeleted({ id });
   }
 
-  async create(createDto: CreateEmergencyRequestDto) {
+  async create(
+    createDto: CreateEmergencyRequestDto,
+    currentUser?: UserDocument,
+  ) {
     const { coordinates, assignedHospital, ...rest } = createDto;
 
     const requestData: Partial<EmergencyRequest> & {
@@ -106,6 +113,10 @@ export class EmergencyRequestService implements OnModuleInit {
       cancelledAt: null,
       cancellationReason: '',
     };
+
+    if (currentUser?.role === UserRole.PATIENT) {
+      requestData.patient = currentUser._id as Types.ObjectId;
+    }
 
     if (assignedHospital) {
       const hospital = await this.findValidHospitalById(assignedHospital);
@@ -152,7 +163,10 @@ export class EmergencyRequestService implements OnModuleInit {
     return result;
   }
 
-  async findAll(query: FindEmergencyRequestsQueryDto = {}) {
+  async findAll(
+    query: FindEmergencyRequestsQueryDto = {},
+    currentUser?: UserDocument,
+  ) {
     const filter: Record<string, unknown> = {};
 
     if (query.status) {
@@ -161,6 +175,12 @@ export class EmergencyRequestService implements OnModuleInit {
 
     if (query.assignedAmbulance) {
       filter.assignedAmbulance = new Types.ObjectId(query.assignedAmbulance);
+    }
+
+    if (currentUser?.role === UserRole.DRIVER) {
+      await this.assertDriverVerified(currentUser);
+      const ambulance = await this.findDriverAmbulance(currentUser);
+      filter.assignedAmbulance = ambulance._id;
     }
 
     if (query.assignedHospital) {
@@ -188,7 +208,7 @@ export class EmergencyRequestService implements OnModuleInit {
       .sort({ createdAt: -1 });
   }
 
-  async findOne(id: string) {
+  async findOne(id: string, currentUser?: UserDocument) {
     const request = await this.emergencyRequestModel
       .findById(id)
       .populate('assignedAmbulance')
@@ -197,6 +217,8 @@ export class EmergencyRequestService implements OnModuleInit {
     if (!request) {
       throw new NotFoundException('Emergency request not found');
     }
+
+    await this.assertCanAccessRequest(request, currentUser);
 
     return request;
   }
@@ -286,19 +308,34 @@ export class EmergencyRequestService implements OnModuleInit {
     return result;
   }
 
-  async cancel(id: string, dto: CancelEmergencyRequestDto) {
+  async cancel(
+    id: string,
+    dto: CancelEmergencyRequestDto,
+    currentUser?: UserDocument,
+  ) {
     const request = await this.emergencyRequestModel.findById(id);
 
     if (!request) {
       throw new NotFoundException('Emergency request not found');
     }
 
+    await this.assertCanCancelRequest(request, currentUser);
+
+    return this.cancelRequestDocument(request, dto);
+  }
+
+  private async cancelRequestDocument(
+    request: EmergencyRequestDocument,
+    dto: CancelEmergencyRequestDto,
+  ) {
     if (request.status === EmergencyRequestStatus.CANCELLED) {
       throw new BadRequestException('Emergency request is already cancelled');
     }
 
     if (request.status === EmergencyRequestStatus.COMPLETED) {
-      throw new BadRequestException('Completed emergency request cannot be cancelled');
+      throw new BadRequestException(
+        'Completed emergency request cannot be cancelled',
+      );
     }
 
     if (request.assignedAmbulance) {
@@ -384,12 +421,18 @@ export class EmergencyRequestService implements OnModuleInit {
     return result;
   }
 
-  async updateStatus(id: string, newStatus: EmergencyRequestStatus) {
+  async updateStatus(
+    id: string,
+    newStatus: EmergencyRequestStatus,
+    currentUser?: UserDocument,
+  ) {
     const request = await this.emergencyRequestModel.findById(id);
 
     if (!request) {
       throw new NotFoundException('Emergency request not found');
     }
+
+    await this.assertCanUpdateStatus(request, currentUser);
 
     const currentStatus = request.status;
     const allowedNext = this.ALLOWED_STATUS_TRANSITIONS[currentStatus] || [];
@@ -445,6 +488,172 @@ export class EmergencyRequestService implements OnModuleInit {
     this.emitEmergencyRequestDeleted(id);
 
     return { message: 'Emergency request deleted successfully' };
+  }
+
+  async findMyRequests(user: UserDocument) {
+    return this.emergencyRequestModel
+      .find({ patient: user._id })
+      .populate('assignedAmbulance')
+      .populate('assignedHospital')
+      .sort({ createdAt: -1 });
+  }
+
+  async findMyRequest(id: string, user: UserDocument) {
+    const request = await this.findPatientOwnedRequest(id, user);
+    return this.populateRequest(request);
+  }
+
+  async cancelMyRequest(
+    id: string,
+    dto: CancelEmergencyRequestDto,
+    user: UserDocument,
+  ) {
+    const request = await this.findPatientOwnedRequest(id, user);
+    return this.cancelRequestDocument(request, dto);
+  }
+
+  async findMyTrip(user: UserDocument) {
+    await this.assertDriverVerified(user);
+
+    const ambulance = await this.findDriverAmbulance(user);
+    const request = await this.emergencyRequestModel
+      .findOne({
+        assignedAmbulance: ambulance._id,
+        status: {
+          $nin: [
+            EmergencyRequestStatus.COMPLETED,
+            EmergencyRequestStatus.CANCELLED,
+          ],
+        },
+      })
+      .populate('assignedAmbulance')
+      .populate('assignedHospital')
+      .sort({ assignedAt: -1, createdAt: -1 });
+
+    if (!request) {
+      throw new NotFoundException('Assigned trip not found');
+    }
+
+    return request;
+  }
+
+  async updateMyTripStatus(
+    user: UserDocument,
+    newStatus: EmergencyRequestStatus,
+  ) {
+    const trip = await this.findMyTrip(user);
+    return this.updateStatus(trip.id, newStatus, user);
+  }
+
+  private async findPatientOwnedRequest(id: string, user: UserDocument) {
+    if (!isValidObjectId(id)) {
+      throw new NotFoundException('Emergency request not found');
+    }
+
+    const request = await this.emergencyRequestModel.findOne({
+      _id: new Types.ObjectId(id),
+      patient: user._id,
+    });
+
+    if (!request) {
+      throw new NotFoundException('Emergency request not found');
+    }
+
+    return request;
+  }
+
+  private async populateRequest(request: EmergencyRequestDocument) {
+    return request.populate(['assignedAmbulance', 'assignedHospital']);
+  }
+
+  private async findDriverAmbulance(
+    user: UserDocument,
+  ): Promise<AmbulanceDocument> {
+    const ambulance = await this.ambulanceModel.findOne({
+      phone: user.phone,
+      isActive: true,
+    });
+
+    if (!ambulance) {
+      throw new NotFoundException('Driver ambulance not found');
+    }
+
+    return ambulance;
+  }
+
+  private async assertCanAccessRequest(
+    request: EmergencyRequestDocument,
+    user?: UserDocument,
+  ) {
+    if (!user) {
+      return;
+    }
+
+    if (user.role === UserRole.PATIENT) {
+      this.assertPatientOwnsRequest(request, user);
+    }
+
+    if (user.role === UserRole.DRIVER) {
+      await this.assertDriverOwnsRequest(request, user);
+    }
+  }
+
+  private async assertCanCancelRequest(
+    request: EmergencyRequestDocument,
+    user?: UserDocument,
+  ) {
+    if (!user) {
+      return;
+    }
+
+    if (user.role === UserRole.PATIENT) {
+      this.assertPatientOwnsRequest(request, user);
+    }
+  }
+
+  private async assertCanUpdateStatus(
+    request: EmergencyRequestDocument,
+    user?: UserDocument,
+  ) {
+    if (!user) {
+      return;
+    }
+
+    if (user.role === UserRole.DRIVER) {
+      await this.assertDriverOwnsRequest(request, user);
+    }
+  }
+
+  private assertPatientOwnsRequest(
+    request: EmergencyRequestDocument,
+    user: UserDocument,
+  ) {
+    if (request.patient?.toString() !== user._id.toString()) {
+      throw new NotFoundException('Emergency request not found');
+    }
+  }
+
+  private async assertDriverOwnsRequest(
+    request: EmergencyRequestDocument,
+    user: UserDocument,
+  ) {
+    await this.assertDriverVerified(user);
+
+    if (!request.assignedAmbulance) {
+      throw new NotFoundException('Emergency request not found');
+    }
+
+    const ambulance = await this.findDriverAmbulance(user);
+
+    if (request.assignedAmbulance.toString() !== ambulance._id.toString()) {
+      throw new NotFoundException('Emergency request not found');
+    }
+  }
+
+  private async assertDriverVerified(user: UserDocument) {
+    await this.roleProfilesService.assertDriverVerified(
+      user._id as Types.ObjectId,
+    );
   }
 
   private async findNearestAvailableAmbulance(
@@ -524,10 +733,7 @@ export class EmergencyRequestService implements OnModuleInit {
       throw new NotFoundException('Ambulance not found');
     }
 
-    if (
-      !ambulance.isActive ||
-      ambulance.status !== AmbulanceStatus.AVAILABLE
-    ) {
+    if (!ambulance.isActive || ambulance.status !== AmbulanceStatus.AVAILABLE) {
       throw new BadRequestException('Selected ambulance is not available');
     }
 

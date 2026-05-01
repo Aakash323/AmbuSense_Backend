@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
-import { isValidObjectId, Model } from 'mongoose';
+import { isValidObjectId, Model, Types } from 'mongoose';
 import {
   Ambulance,
   AmbulanceDocument,
@@ -15,7 +15,13 @@ import {
   EmergencyRequest,
   EmergencyRequestDocument,
 } from '../emergency-request/entities/emergency-request.entity';
-import { Hospital, HospitalDocument } from '../hospital/entities/hospital.entity';
+import {
+  Hospital,
+  HospitalDocument,
+} from '../hospital/entities/hospital.entity';
+import { UserRole } from '../constants/enums';
+import type { UserDocument } from '../users/entities/user.entity';
+import { RoleProfilesService } from '../role-profiles/role-profiles.service';
 
 type Coordinates = [number, number];
 
@@ -57,17 +63,19 @@ export class RoutesService {
     @InjectModel(Hospital.name)
     private readonly hospitalModel: Model<HospitalDocument>,
     private readonly configService: ConfigService,
+    private readonly roleProfilesService: RoleProfilesService,
   ) {
-    this.osrmBaseUrl =
-      this.configService.get<string>('OSRM_BASE_URL')!
+    this.osrmBaseUrl = this.configService.get<string>('OSRM_BASE_URL')!;
   }
 
   async getAmbulanceToRequestRoute(
     ambulanceId: string,
     requestId: string,
+    user?: UserDocument,
   ) {
     const ambulance = await this.findAmbulance(ambulanceId);
     const request = await this.findRequest(requestId);
+    await this.assertCanAccessRoute(request, user, ambulance.id);
 
     return this.getRouteLeg(
       ambulance.currentLocation.coordinates,
@@ -75,8 +83,9 @@ export class RoutesService {
     );
   }
 
-  async getRequestToHospitalRoute(requestId: string) {
+  async getRequestToHospitalRoute(requestId: string, user?: UserDocument) {
     const request = await this.findRequest(requestId);
+    await this.assertCanAccessRoute(request, user);
     const hospital = await this.findAssignedHospital(request);
 
     return this.getRouteLeg(
@@ -85,8 +94,9 @@ export class RoutesService {
     );
   }
 
-  async getFullRequestRoute(requestId: string) {
+  async getFullRequestRoute(requestId: string, user?: UserDocument) {
     const request = await this.findRequest(requestId);
+    await this.assertCanAccessRoute(request, user);
 
     if (!request.assignedAmbulance) {
       throw new BadRequestException(
@@ -112,8 +122,7 @@ export class RoutesService {
       ambulanceToPickup,
       pickupToHospital,
       totalDistance:
-        ambulanceToPickup.distanceInMeters +
-        pickupToHospital.distanceInMeters,
+        ambulanceToPickup.distanceInMeters + pickupToHospital.distanceInMeters,
       totalDuration:
         ambulanceToPickup.durationInSeconds +
         pickupToHospital.durationInSeconds,
@@ -146,6 +155,53 @@ export class RoutesService {
     }
 
     return request;
+  }
+
+  private async assertCanAccessRoute(
+    request: EmergencyRequestDocument,
+    user?: UserDocument,
+    requestedAmbulanceId?: string,
+  ) {
+    if (
+      !user ||
+      user.role === UserRole.ADMIN ||
+      user.role === UserRole.DISPATCHER
+    ) {
+      return;
+    }
+
+    if (user.role === UserRole.PATIENT) {
+      if (request.patient?.toString() !== user._id.toString()) {
+        throw new NotFoundException('Emergency request not found');
+      }
+      return;
+    }
+
+    if (user.role === UserRole.DRIVER) {
+      await this.roleProfilesService.assertDriverVerified(
+        user._id as Types.ObjectId,
+      );
+
+      const ambulance = await this.ambulanceModel.findOne({
+        phone: user.phone,
+        isActive: true,
+      });
+
+      if (!ambulance) {
+        throw new NotFoundException('Ambulance not found');
+      }
+
+      if (
+        requestedAmbulanceId &&
+        requestedAmbulanceId !== ambulance._id.toString()
+      ) {
+        throw new NotFoundException('Ambulance not found');
+      }
+
+      if (request.assignedAmbulance?.toString() !== ambulance._id.toString()) {
+        throw new NotFoundException('Emergency request not found');
+      }
+    }
   }
 
   private async findAssignedHospital(request: EmergencyRequestDocument) {
