@@ -35,6 +35,7 @@ export class Ambulance {
   phone!: string;
 
   @Prop({
+    type: String,
     required: true,
     enum: Object.values(AmbulanceStatus),
     default: AmbulanceStatus.OFFLINE,
@@ -77,7 +78,7 @@ export class Ambulance {
   @Prop({ type: Date, default: null })
   completedAt!: Date | null;
 
-   createdAt?: Date;
+  createdAt?: Date;
   updatedAt?: Date;
 }
 

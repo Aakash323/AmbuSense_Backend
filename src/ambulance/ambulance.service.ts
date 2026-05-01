@@ -6,19 +6,24 @@ import {
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { ModuleRef } from '@nestjs/core';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 
 import { UpdateAmbulanceDto } from './dto/update-ambulance.dto';
 import { CreateAmbulanceDto } from './dto/create-ambulance.dto';
 import { UpdateAmbulanceStatusDto } from './dto/update-ambulance-status.dto';
 import { Ambulance, AmbulanceDocument } from './entities/ambulance.entity';
-import { AmbulanceStatus } from '../constants/enums';
+import { AmbulanceStatus, UserRole } from '../constants/enums';
 import { TrackingGateway } from '../gateway/tracking.gateway';
 import { FindAmbulancesQueryDto } from './dto/find-ambulances-query.dto';
+import type { UserDocument } from '../users/entities/user.entity';
+import { RoleProfilesService } from '../role-profiles/role-profiles.service';
 
 const ALLOWED_STATUS_TRANSITIONS: Record<AmbulanceStatus, AmbulanceStatus[]> = {
   [AmbulanceStatus.OFFLINE]: [AmbulanceStatus.AVAILABLE],
-  [AmbulanceStatus.AVAILABLE]: [AmbulanceStatus.ASSIGNED, AmbulanceStatus.OFFLINE],
+  [AmbulanceStatus.AVAILABLE]: [
+    AmbulanceStatus.ASSIGNED,
+    AmbulanceStatus.OFFLINE,
+  ],
   [AmbulanceStatus.ASSIGNED]: [AmbulanceStatus.EN_ROUTE],
   [AmbulanceStatus.EN_ROUTE]: [AmbulanceStatus.AT_PATIENT],
   [AmbulanceStatus.AT_PATIENT]: [AmbulanceStatus.TRANSPORTING],
@@ -35,6 +40,7 @@ export class AmbulanceService implements OnModuleInit {
     @InjectModel(Ambulance.name)
     private readonly ambulanceModel: Model<AmbulanceDocument>,
     private readonly moduleRef: ModuleRef,
+    private readonly roleProfilesService: RoleProfilesService,
   ) {}
 
   onModuleInit() {
@@ -75,9 +81,13 @@ export class AmbulanceService implements OnModuleInit {
   async create(createAmbulanceDto: CreateAmbulanceDto) {
     const { coordinates, ...rest } = createAmbulanceDto;
 
-      if(await this.ambulanceModel.findOne({ ambulanceCode: createAmbulanceDto.ambulanceCode })) {
-        throw new BadRequestException('Ambulance with this code already exists');
-      }
+    if (
+      await this.ambulanceModel.findOne({
+        ambulanceCode: createAmbulanceDto.ambulanceCode,
+      })
+    ) {
+      throw new BadRequestException('Ambulance with this code already exists');
+    }
     const created = await this.ambulanceModel.create({
       ...rest,
       currentLocation: {
@@ -139,7 +149,7 @@ export class AmbulanceService implements OnModuleInit {
     const updated = await this.ambulanceModel.findByIdAndUpdate(
       id,
       updateData,
-      { new: true },
+      { returnDocument: 'after' },
     );
 
     if (!updated) {
@@ -160,7 +170,15 @@ export class AmbulanceService implements OnModuleInit {
     return updated;
   }
 
-  async updateStatus(id: string, dto: UpdateAmbulanceStatusDto) {
+  async updateStatus(
+    id: string,
+    dto: UpdateAmbulanceStatusDto,
+    currentUser?: UserDocument,
+  ) {
+    if (currentUser?.role === UserRole.DRIVER) {
+      await this.assertDriverCanAccessAmbulance(id, currentUser);
+    }
+
     const ambulance = await this.ambulanceModel.findById(id);
 
     if (!ambulance) {
@@ -170,8 +188,7 @@ export class AmbulanceService implements OnModuleInit {
     const currentStatus = ambulance.status;
     const nextStatus = dto.status;
 
-    const allowedNextStatuses =
-      ALLOWED_STATUS_TRANSITIONS[currentStatus] || [];
+    const allowedNextStatuses = ALLOWED_STATUS_TRANSITIONS[currentStatus] || [];
 
     if (!allowedNextStatuses.includes(nextStatus)) {
       throw new BadRequestException(
@@ -242,5 +259,24 @@ export class AmbulanceService implements OnModuleInit {
 
   private escapeRegex(value: string) {
     return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  private async assertDriverCanAccessAmbulance(
+    ambulanceId: string,
+    user: UserDocument,
+  ) {
+    await this.roleProfilesService.assertDriverVerified(
+      user._id as Types.ObjectId,
+    );
+
+    const ambulance = await this.ambulanceModel.findOne({
+      _id: ambulanceId,
+      phone: user.phone,
+      isActive: true,
+    });
+
+    if (!ambulance) {
+      throw new NotFoundException('Ambulance not found');
+    }
   }
 }

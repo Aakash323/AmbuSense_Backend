@@ -10,6 +10,9 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { GatewayModule } from './gateway/gateway.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { RoutesModule } from './routes/routes.module';
+import { AuthModule } from './auth/auth.module';
+import { UploadsModule } from './uploads/uploads.module';
+import { DriversModule } from './drivers/drivers.module';
 
 @Module({
   imports: [
@@ -28,6 +31,9 @@ import { RoutesModule } from './routes/routes.module';
     DashboardModule,
     RoutesModule,
     GatewayModule,
+    AuthModule,
+    UploadsModule,
+    DriversModule,
   ],
   controllers: [AppController],
   providers: [AppService],
