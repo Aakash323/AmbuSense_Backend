@@ -138,6 +138,15 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
+  async logout(req: Request, res: ExpressResponse) {
+    const authResponse = await this.getAuth().api.signOut({
+      headers: this.headersFromRequest(req),
+      asResponse: true,
+    } as never);
+
+    this.copyAuthHeaders(authResponse, res);
+  }
+
   async me(user: UserDocument | undefined) {
     if (!user) {
       throw new UnauthorizedException('Not authenticated');

@@ -101,6 +101,19 @@ export class AuthController {
     return this.authService.login(dto, req, res);
   }
 
+  @Post('logout')
+  @ApiOperation({ summary: 'Logout and clear session cookie' })
+  @ApiResponse({
+    status: 200,
+    description: 'Logout successful and session cookie cleared.',
+  })
+  async logout(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    return this.authService.logout(req, res);
+  }
+
   @Get('me')
   @UseGuards(AuthGuard)
   @ApiCookieAuth('session')
