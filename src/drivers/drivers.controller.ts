@@ -1,4 +1,12 @@
-import { Body, Controller, Param, Patch, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Patch,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import {
   ApiBody,
   ApiCookieAuth,
@@ -21,6 +29,15 @@ import { driverProfileExample } from '../swagger/api-examples';
 @UseGuards(AuthGuard, RolesGuard)
 export class DriversController {
   constructor(private readonly roleProfilesService: RoleProfilesService) {}
+
+  @Get()
+  @Roles(UserRole.ADMIN)
+  findAll(@Query('isVerified') isVerified?: string) {
+    const verifiedFilter =
+      isVerified === undefined ? undefined : isVerified === 'true';
+
+    return this.roleProfilesService.findDrivers(verifiedFilter);
+  }
 
   @Patch(':id/verify')
   @Roles(UserRole.ADMIN)

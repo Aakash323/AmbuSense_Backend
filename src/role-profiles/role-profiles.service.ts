@@ -41,6 +41,24 @@ export class RoleProfilesService {
     return profile ? this.sanitize(profile) : null;
   }
 
+  async findDrivers(isVerified?: boolean) {
+    const filter =
+      isVerified === undefined
+        ? {}
+        : {
+            isVerified,
+          };
+
+    const profiles = await this.driverModel
+      .find(filter)
+      .populate('user')
+      .populate('documentImageId')
+      .sort({ updatedAt: -1, createdAt: -1 })
+      .exec();
+
+    return profiles.map((profile) => this.sanitizeDriverForAdmin(profile));
+  }
+
   async assertDriverVerified(user: string | Types.ObjectId) {
     const profile = await this.driverModel.findOne({ user }).exec();
 
@@ -161,5 +179,56 @@ export class RoleProfilesService {
     }
 
     return sanitized;
+  }
+
+  private sanitizeDriverForAdmin(profile: DriverDocument) {
+    const user = profile.user as unknown as {
+      _id: Types.ObjectId;
+      fullName: string;
+      email: string;
+      phone: string;
+      role: UserRole;
+      isActive: boolean;
+    };
+    const media = profile.documentImageId as unknown as
+      | {
+          _id: Types.ObjectId;
+          originalName: string;
+          fileName: string;
+          mimeType: string;
+          size: number;
+          path: string;
+          url: string;
+          uploadedBy: Types.ObjectId;
+        }
+      | null;
+
+    return {
+      id: profile._id.toString(),
+      user: {
+        id: user._id.toString(),
+        fullName: user.fullName,
+        email: user.email,
+        phone: user.phone,
+        role: user.role,
+        isActive: user.isActive,
+      },
+      documentType: profile.documentType,
+      documentImageId: media?._id.toString() ?? null,
+      documentImage: media
+        ? {
+            id: media._id.toString(),
+            originalName: media.originalName,
+            fileName: media.fileName,
+            mimeType: media.mimeType,
+            size: media.size,
+            path: media.path,
+            url: media.url,
+            uploadedBy: media.uploadedBy.toString(),
+          }
+        : null,
+      isVerified: profile.isVerified,
+      verificationNote: profile.verificationNote,
+    };
   }
 }
