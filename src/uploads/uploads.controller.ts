@@ -7,6 +7,14 @@ import {
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
+import {
+  ApiBody,
+  ApiConsumes,
+  ApiCookieAuth,
+  ApiOperation,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 import { extname, join } from 'path';
@@ -19,6 +27,7 @@ import { UserRole } from '../constants/enums';
 import type { UserDocument } from '../users/entities/user.entity';
 import { UploadDriverDocumentDto } from './dto/upload-driver-document.dto';
 import { UploadsService } from './uploads.service';
+import { driverProfileExample, mediaExample } from '../swagger/api-examples';
 
 const allowedImageMimeTypes = new Set([
   'image/jpeg',
@@ -26,6 +35,8 @@ const allowedImageMimeTypes = new Set([
   'image/webp',
 ]);
 
+@ApiTags('Uploads')
+@ApiCookieAuth('session')
 @Controller('uploads')
 @UseGuards(AuthGuard, RolesGuard)
 export class UploadsController {
@@ -33,6 +44,38 @@ export class UploadsController {
 
   @Post('driver-document')
   @Roles(UserRole.DRIVER, UserRole.ADMIN)
+  @ApiOperation({ summary: 'Upload a driver verification document' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['file', 'documentType'],
+      properties: {
+        file: {
+          type: 'string',
+          format: 'binary',
+          description: 'JPEG, PNG, or WebP document image.',
+        },
+        documentType: { type: 'string', example: 'Driving License' },
+        driverId: {
+          type: 'string',
+          example: driverProfileExample.id,
+          description: 'Required only for admin uploads.',
+        },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Document uploaded and attached to the driver profile.',
+    schema: {
+      example: {
+        media: mediaExample,
+        driverProfile: driverProfileExample,
+      },
+    },
+  })
+  @ApiResponse({ status: 400, description: 'Invalid file or upload payload.' })
   @UseInterceptors(
     FileInterceptor('file', {
       storage: diskStorage({

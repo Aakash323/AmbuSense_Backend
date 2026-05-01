@@ -103,11 +103,16 @@ async function bootstrap() {
 
     if (swaggerPassword) {
       const config = new DocumentBuilder()
-        .setTitle('Consultancy Management System Grace')
+        .setTitle('AmbuSense API')
         .setDescription(
-          'API documentation for the Consultancy Management System Grace',
+          'API documentation for AmbuSense ambulance dispatch, emergency requests, driver workflows, uploads, and authentication.',
         )
         .setVersion('1.0')
+        .addCookieAuth(
+          'better-auth.session_token',
+          { type: 'apiKey', in: 'cookie' },
+          'session',
+        )
         .addBearerAuth()
         .build();
 
