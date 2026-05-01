@@ -4,11 +4,19 @@ import {
   EmergencyRequestStatus,
   HospitalAssignmentTechnique,
 } from '../../constants/enums';
+import { User } from '../../users/entities/user.entity';
 
 export type EmergencyRequestDocument = HydratedDocument<EmergencyRequest>;
 
 @Schema({ timestamps: true })
 export class EmergencyRequest {
+  @Prop({
+    type: Types.ObjectId,
+    ref: User.name,
+    default: null,
+  })
+  patient?: Types.ObjectId | null;
+
   @Prop({ required: true, trim: true })
   patientName!: string;
 
@@ -47,11 +55,13 @@ export class EmergencyRequest {
   assignedHospital?: Types.ObjectId | null;
 
   @Prop({
+    type: String,
     enum: Object.values(HospitalAssignmentTechnique),
   })
   hospitalAssignmentTechnique?: HospitalAssignmentTechnique;
 
   @Prop({
+    type: String,
     required: true,
     enum: Object.values(EmergencyRequestStatus),
     default: EmergencyRequestStatus.PENDING,

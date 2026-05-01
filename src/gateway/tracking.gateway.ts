@@ -1,4 +1,10 @@
-import { Inject, forwardRef } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Inject,
+  UnauthorizedException,
+  forwardRef,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import {
   ConnectedSocket,
   MessageBody,
@@ -8,10 +14,16 @@ import {
   WebSocketGateway,
   WebSocketServer,
 } from '@nestjs/websockets';
+import type { Request } from 'express';
+import { Types } from 'mongoose';
 import { Server, Socket } from 'socket.io';
 import { AmbulanceService } from '../ambulance/ambulance.service';
 import { AmbulanceDocument } from '../ambulance/entities/ambulance.entity';
+import { AuthService } from '../auth/auth.service';
+import { UserRole } from '../constants/enums';
 import { EmergencyRequestDocument } from '../emergency-request/entities/emergency-request.entity';
+import { RoleProfilesService } from '../role-profiles/role-profiles.service';
+import { UserDocument } from '../users/entities/user.entity';
 
 @WebSocketGateway({
   cors: {
@@ -28,6 +40,9 @@ export class TrackingGateway
   constructor(
     @Inject(forwardRef(() => AmbulanceService))
     private readonly ambulanceService: AmbulanceService,
+    private readonly authService: AuthService,
+    private readonly configService: ConfigService,
+    private readonly roleProfilesService: RoleProfilesService,
   ) {}
 
   handleConnection(client: Socket) {
@@ -55,6 +70,9 @@ export class TrackingGateway
     );
 
     try {
+      const user = await this.authenticateLocationSender(client);
+      await this.assertCanUpdateAmbulanceLocation(user, payload.ambulanceId);
+
       // 🔹 1. Get current ambulance from DB
       const current = await this.ambulanceService.findOne(payload.ambulanceId);
 
@@ -91,6 +109,59 @@ export class TrackingGateway
     } catch (error) {
       console.error('[server] error handling location:', error);
       return { ok: false, error: 'failed to update location' };
+    }
+  }
+
+  private async authenticateLocationSender(client: Socket) {
+    if (this.isSystemSocket(client)) {
+      return null;
+    }
+
+    try {
+      return await this.authService.getCurrentUser({
+        headers: client.handshake.headers,
+      } as Request);
+    } catch {
+      throw new UnauthorizedException('Socket authentication required');
+    }
+  }
+
+  private isSystemSocket(client: Socket) {
+    const expectedToken = this.configService.get<string>('SOCKET_SYSTEM_TOKEN');
+
+    if (!expectedToken) {
+      return false;
+    }
+
+    const authToken = client.handshake.auth?.systemToken;
+    const headerToken = client.handshake.headers['x-system-token'];
+    const token = Array.isArray(headerToken) ? headerToken[0] : headerToken;
+
+    return authToken === expectedToken || token === expectedToken;
+  }
+
+  private async assertCanUpdateAmbulanceLocation(
+    user: UserDocument | null,
+    ambulanceId: string,
+  ) {
+    if (!user || user.role === UserRole.ADMIN) {
+      return;
+    }
+
+    if (user.role !== UserRole.DRIVER) {
+      throw new ForbiddenException(
+        'Only drivers can update ambulance location',
+      );
+    }
+
+    await this.roleProfilesService.assertDriverVerified(
+      user._id as Types.ObjectId,
+    );
+
+    const ambulance = await this.ambulanceService.findOne(ambulanceId);
+
+    if (ambulance.phone !== user.phone || !ambulance.isActive) {
+      throw new ForbiddenException('Cannot update another driver ambulance');
     }
   }
 
