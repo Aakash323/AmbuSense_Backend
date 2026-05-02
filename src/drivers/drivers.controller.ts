@@ -12,6 +12,7 @@ import {
   ApiCookieAuth,
   ApiOperation,
   ApiParam,
+  ApiQuery,
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
@@ -20,6 +21,7 @@ import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { UserRole } from '../constants/enums';
 import { RoleProfilesService } from '../role-profiles/role-profiles.service';
+import { FindDriversQueryDto } from './dto/find-drivers-query.dto';
 import { VerifyDriverDto } from './dto/verify-driver.dto';
 import { driverProfileExample } from '../swagger/api-examples';
 
@@ -32,11 +34,12 @@ export class DriversController {
 
   @Get()
   @Roles(UserRole.ADMIN)
-  findAll(@Query('isVerified') isVerified?: string) {
-    const verifiedFilter =
-      isVerified === undefined ? undefined : isVerified === 'true';
-
-    return this.roleProfilesService.findDrivers(verifiedFilter);
+  @ApiOperation({ summary: 'List driver profiles' })
+  @ApiQuery({ name: 'isVerified', required: false, example: true })
+  @ApiQuery({ name: 'page', required: false, example: 1 })
+  @ApiQuery({ name: 'limit', required: false, example: 10 })
+  findAll(@Query() query: FindDriversQueryDto) {
+    return this.roleProfilesService.findDrivers(query);
   }
 
   @Patch(':id/verify')

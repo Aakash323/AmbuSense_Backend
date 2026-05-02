@@ -9,20 +9,18 @@ import {
   Min,
 } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
+import { UserRole } from '../../constants/enums';
 
-export class FindHospitalsQueryDto {
-  @ApiPropertyOptional({ example: 'City Care' })
+export class FindUsersQueryDto {
+  @ApiPropertyOptional({ example: 'dispatcher@example.com' })
   @IsOptional()
   @IsString()
   search?: string;
 
-  @ApiPropertyOptional({
-    enum: ['available', 'busy', 'offline'],
-    example: 'available',
-  })
+  @ApiPropertyOptional({ enum: UserRole, example: UserRole.DISPATCHER })
   @IsOptional()
-  @IsEnum(['available', 'busy', 'offline'])
-  status?: 'available' | 'busy' | 'offline';
+  @IsEnum(UserRole)
+  role?: UserRole;
 
   @ApiPropertyOptional({ example: true })
   @IsOptional()
@@ -42,7 +40,7 @@ export class FindHospitalsQueryDto {
     return value;
   })
   @IsBoolean()
-  hasAvailableBeds?: boolean;
+  isActive?: boolean;
 
   @ApiPropertyOptional({ example: 1, minimum: 1 })
   @IsOptional()

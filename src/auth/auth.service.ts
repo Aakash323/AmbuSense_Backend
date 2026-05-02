@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   HttpException,
   InternalServerErrorException,
@@ -26,6 +27,12 @@ type AuthUserPayload = {
 
 type BetterAuthUserRecord = {
   _id: string | ObjectId;
+};
+
+type MongoDuplicateKeyError = {
+  code?: number;
+  keyPattern?: Record<string, unknown>;
+  keyValue?: Record<string, unknown>;
 };
 
 @Injectable()
@@ -75,17 +82,25 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
     res: ExpressResponse | undefined,
     copyCookies: boolean,
   ) {
-    const authResponse = await this.getAuth().api.signUpEmail({
-      body: {
-        name: dto.fullName,
-        email: dto.email,
-        password: dto.password,
-        phone: dto.phone,
-        role: dto.role,
-      },
-      headers: this.headersFromRequest(req, copyCookies),
-      asResponse: true,
-    } as never);
+    await this.assertUserIsUnique(dto);
+
+    let authResponse: Response;
+    try {
+      authResponse = await this.getAuth().api.signUpEmail({
+        body: {
+          name: dto.fullName,
+          email: dto.email,
+          password: dto.password,
+          phone: dto.phone,
+          role: dto.role,
+        },
+        headers: this.headersFromRequest(req, copyCookies),
+        asResponse: true,
+      } as never);
+    } catch (error) {
+      this.handleDuplicateUserError(error);
+      throw error;
+    }
     const payload = await this.readAuthResponse(authResponse);
 
     this.assertAuthResponseOk(authResponse, payload);
@@ -209,6 +224,50 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
         { cause: error },
       );
     }
+  }
+
+  private async assertUserIsUnique(dto: SignupDto) {
+    const [emailUser, phoneUser] = await Promise.all([
+      this.usersService.findByEmail(dto.email),
+      this.usersService.findByPhone(dto.phone),
+    ]);
+
+    if (emailUser) {
+      throw new ConflictException('A user with this email already exists');
+    }
+
+    if (phoneUser) {
+      throw new ConflictException('A user with this phone already exists');
+    }
+  }
+
+  private handleDuplicateUserError(error: unknown): never | void {
+    if (!this.isMongoDuplicateKeyError(error)) {
+      return;
+    }
+
+    const duplicateField = Object.keys(error.keyPattern ?? {})[0];
+
+    if (duplicateField === 'email') {
+      throw new ConflictException('A user with this email already exists');
+    }
+
+    if (duplicateField === 'phone') {
+      throw new ConflictException('A user with this phone already exists');
+    }
+
+    throw new ConflictException('A user with these details already exists');
+  }
+
+  private isMongoDuplicateKeyError(
+    error: unknown,
+  ): error is MongoDuplicateKeyError {
+    return (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      (error as MongoDuplicateKeyError).code === 11000
+    );
   }
 
   private async cleanupAuthUser(authUserId: string) {

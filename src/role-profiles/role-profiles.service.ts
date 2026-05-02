@@ -7,6 +7,7 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { UserRole } from '../constants/enums';
+import { FindDriversQueryDto } from '../drivers/dto/find-drivers-query.dto';
 import {
   Ambulance,
   AmbulanceDocument,
@@ -47,20 +48,28 @@ export class RoleProfilesService {
     return profile ? this.sanitize(profile) : null;
   }
 
-  async findDrivers(isVerified?: boolean) {
+  async findDrivers(query: FindDriversQueryDto = {}) {
     const filter =
-      isVerified === undefined
+      query.isVerified === undefined
         ? {}
         : {
-            isVerified,
+            isVerified: query.isVerified,
           };
 
-    const profiles = await this.driverModel
-      .find(filter)
-      .populate('user')
-      .populate('documentImageId')
-      .sort({ updatedAt: -1, createdAt: -1 })
-      .exec();
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 10;
+    const skip = (page - 1) * limit;
+    const [profiles, total] = await Promise.all([
+      this.driverModel
+        .find(filter)
+        .populate('user')
+        .populate('documentImageId')
+        .sort({ updatedAt: -1, createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .exec(),
+      this.driverModel.countDocuments(filter).exec(),
+    ]);
 
     const phones = profiles
       .map((profile) => {
@@ -81,13 +90,21 @@ export class RoleProfilesService {
       }
     });
 
-    return profiles.map((profile) => {
-      const user = profile.user as unknown as { phone?: string };
-      return this.sanitizeDriverForAdmin(
-        profile,
-        user.phone ? ambulanceByPhone.get(user.phone) : null,
-      );
-    });
+    return {
+      data: profiles.map((profile) => {
+        const user = profile.user as unknown as { phone?: string };
+        return this.sanitizeDriverForAdmin(
+          profile,
+          user.phone ? ambulanceByPhone.get(user.phone) : null,
+        );
+      }),
+      meta: {
+        page,
+        limit,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
+      },
+    };
   }
 
   async assertDriverVerified(user: string | Types.ObjectId) {

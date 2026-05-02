@@ -1,29 +1,8 @@
 import { Transform } from 'class-transformer';
-import {
-  IsBoolean,
-  IsEnum,
-  IsInt,
-  IsOptional,
-  IsString,
-  Max,
-  Min,
-} from 'class-validator';
+import { IsBoolean, IsInt, IsOptional, Max, Min } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 
-export class FindHospitalsQueryDto {
-  @ApiPropertyOptional({ example: 'City Care' })
-  @IsOptional()
-  @IsString()
-  search?: string;
-
-  @ApiPropertyOptional({
-    enum: ['available', 'busy', 'offline'],
-    example: 'available',
-  })
-  @IsOptional()
-  @IsEnum(['available', 'busy', 'offline'])
-  status?: 'available' | 'busy' | 'offline';
-
+export class FindDriversQueryDto {
   @ApiPropertyOptional({ example: true })
   @IsOptional()
   @Transform(({ value }) => {
@@ -42,7 +21,7 @@ export class FindHospitalsQueryDto {
     return value;
   })
   @IsBoolean()
-  hasAvailableBeds?: boolean;
+  isVerified?: boolean;
 
   @ApiPropertyOptional({ example: 1, minimum: 1 })
   @IsOptional()

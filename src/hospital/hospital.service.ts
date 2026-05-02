@@ -46,7 +46,28 @@ export class HospitalService {
       ];
     }
 
-    return this.hospitalModel.find(filter).sort({ createdAt: -1 });
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 10;
+    const skip = (page - 1) * limit;
+    const [data, total] = await Promise.all([
+      this.hospitalModel
+        .find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .exec(),
+      this.hospitalModel.countDocuments(filter).exec(),
+    ]);
+
+    return {
+      data,
+      meta: {
+        page,
+        limit,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
+      },
+    };
   }
 
   async findOne(id: string) {
