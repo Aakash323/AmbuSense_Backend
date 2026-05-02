@@ -107,6 +107,7 @@ export class EmergencyRequestService implements OnModuleInit {
       status: EmergencyRequestStatus.PENDING,
       assignedAmbulance: null,
       assignedHospital: null,
+      hospitalBedReserved: false,
       assignedAt: null,
       reachedPatientAt: null,
       completedAt: null,
@@ -148,6 +149,19 @@ export class EmergencyRequestService implements OnModuleInit {
         requestData.assignedHospital = nearestHospital._id as Types.ObjectId;
         requestData.hospitalAssignmentTechnique =
           HospitalAssignmentTechnique.SYSTEM_AUTO;
+      }
+
+      if (requestData.assignedHospital) {
+        const reserved = await this.reserveHospitalBed(
+          requestData.assignedHospital,
+        );
+
+        if (!reserved) {
+          await this.releaseAmbulance(nearestAmbulance._id as Types.ObjectId);
+          throw new BadRequestException('No available hospital beds found');
+        }
+
+        requestData.hospitalBedReserved = true;
       }
     }
 
@@ -245,11 +259,37 @@ export class EmergencyRequestService implements OnModuleInit {
       };
     }
 
+    const previousHospital = request.assignedHospital;
+    const previousBedReserved = request.hospitalBedReserved;
+
     if (dto.assignedHospital !== undefined) {
       const hospital = await this.findValidHospitalById(dto.assignedHospital);
       request.assignedHospital = hospital._id as Types.ObjectId;
       request.hospitalAssignmentTechnique =
         HospitalAssignmentTechnique.USER_CHOICE;
+    }
+
+    const hospitalChanged =
+      previousHospital &&
+      request.assignedHospital &&
+      previousHospital.toString() !== request.assignedHospital.toString();
+
+    if (
+      request.assignedHospital &&
+      this.shouldReserveBedForRequest(request) &&
+      (!request.hospitalBedReserved || hospitalChanged)
+    ) {
+      const reserved = await this.reserveHospitalBed(request.assignedHospital);
+
+      if (!reserved) {
+        throw new BadRequestException('No available hospital beds found');
+      }
+
+      request.hospitalBedReserved = true;
+    }
+
+    if (previousBedReserved && hospitalChanged) {
+      await this.releaseHospitalBed(previousHospital);
     }
 
     if (dto.notes !== undefined) {
@@ -296,6 +336,15 @@ export class EmergencyRequestService implements OnModuleInit {
     request.status = EmergencyRequestStatus.ASSIGNED;
     request.assignedAt = assignedAt;
 
+    const reserved = await this.reserveHospitalBed(hospital._id as Types.ObjectId);
+
+    if (!reserved) {
+      await this.releaseAmbulance(ambulance._id as Types.ObjectId);
+      throw new BadRequestException('No available hospital beds found');
+    }
+
+    request.hospitalBedReserved = true;
+
     if (dto.notes !== undefined) {
       request.notes = dto.notes;
     }
@@ -340,6 +389,11 @@ export class EmergencyRequestService implements OnModuleInit {
 
     if (request.assignedAmbulance) {
       await this.releaseAmbulance(request.assignedAmbulance);
+    }
+
+    if (this.shouldReleaseReservedBedOnCancellation(request)) {
+      await this.releaseHospitalBed(request.assignedHospital);
+      request.hospitalBedReserved = false;
     }
 
     request.status = EmergencyRequestStatus.CANCELLED;
@@ -402,11 +456,37 @@ export class EmergencyRequestService implements OnModuleInit {
     request.status = EmergencyRequestStatus.ASSIGNED;
     request.assignedAt = assignedAt;
 
+    const previousHospital = request.assignedHospital;
+    const previousBedReserved = request.hospitalBedReserved;
+
     if (dto.hospitalId !== undefined) {
       const hospital = await this.findValidHospitalById(dto.hospitalId);
       request.assignedHospital = hospital._id as Types.ObjectId;
       request.hospitalAssignmentTechnique =
         HospitalAssignmentTechnique.USER_CHOICE;
+    }
+
+    const hospitalChanged =
+      previousHospital &&
+      request.assignedHospital &&
+      previousHospital.toString() !== request.assignedHospital.toString();
+
+    if (
+      request.assignedHospital &&
+      (!request.hospitalBedReserved || hospitalChanged)
+    ) {
+      const reserved = await this.reserveHospitalBed(request.assignedHospital);
+
+      if (!reserved) {
+        await this.releaseAmbulance(ambulance._id as Types.ObjectId);
+        throw new BadRequestException('No available hospital beds found');
+      }
+
+      request.hospitalBedReserved = true;
+    }
+
+    if (previousBedReserved && hospitalChanged) {
+      await this.releaseHospitalBed(previousHospital);
     }
 
     if (dto.notes !== undefined) {
@@ -482,6 +562,10 @@ export class EmergencyRequestService implements OnModuleInit {
       if (ambulance) {
         await this.releaseAmbulance(ambulance._id as Types.ObjectId);
       }
+    }
+
+    if (this.shouldReleaseReservedBedOnCancellation(request)) {
+      await this.releaseHospitalBed(request.assignedHospital);
     }
 
     await this.emergencyRequestModel.findByIdAndDelete(id);
@@ -791,6 +875,65 @@ export class EmergencyRequestService implements OnModuleInit {
     ambulance.completedAt = null;
 
     await ambulance.save();
+  }
+
+  private async reserveHospitalBed(
+    hospitalId: Types.ObjectId | null | undefined,
+  ) {
+    if (!hospitalId) {
+      return false;
+    }
+
+    const updated = await this.hospitalModel.findOneAndUpdate(
+      {
+        _id: hospitalId,
+        status: 'available',
+        availableBeds: { $gt: 0 },
+      },
+      {
+        $inc: { availableBeds: -1 },
+      },
+      { returnDocument: 'after' },
+    );
+
+    return !!updated;
+  }
+
+  private async releaseHospitalBed(
+    hospitalId: Types.ObjectId | null | undefined,
+  ) {
+    if (!hospitalId) {
+      return;
+    }
+
+    await this.hospitalModel.updateOne(
+      {
+        _id: hospitalId,
+        $expr: { $lt: ['$availableBeds', '$capacity'] },
+      },
+      {
+        $inc: { availableBeds: 1 },
+      },
+    );
+  }
+
+  private shouldReleaseReservedBedOnCancellation(
+    request: EmergencyRequestDocument,
+  ) {
+    return (
+      !!request.hospitalBedReserved &&
+      !!request.assignedHospital &&
+      request.status !== EmergencyRequestStatus.AT_HOSPITAL &&
+      request.status !== EmergencyRequestStatus.COMPLETED
+    );
+  }
+
+  private shouldReserveBedForRequest(request: EmergencyRequestDocument) {
+    return (
+      request.status !== EmergencyRequestStatus.PENDING &&
+      request.status !== EmergencyRequestStatus.CANCELLED &&
+      request.status !== EmergencyRequestStatus.COMPLETED
+    );
   }
 
   private async findNearestValidHospital(

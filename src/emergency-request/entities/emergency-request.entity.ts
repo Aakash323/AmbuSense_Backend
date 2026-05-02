@@ -54,6 +54,9 @@ export class EmergencyRequest {
   })
   assignedHospital?: Types.ObjectId | null;
 
+  @Prop({ default: false })
+  hospitalBedReserved!: boolean;
+
   @Prop({
     type: String,
     enum: Object.values(HospitalAssignmentTechnique),
