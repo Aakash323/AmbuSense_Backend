@@ -20,6 +20,8 @@ import { AuthService } from './auth.service';
 import { AuthGuard } from './auth.guard';
 import { CurrentUser } from './current-user.decorator';
 import { LoginDto } from './dto/login.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 import { Roles } from './roles.decorator';
 import { RolesGuard } from './roles.guard';
 import { SignupDto } from './dto/signup.dto';
@@ -99,6 +101,28 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ) {
     return this.authService.login(dto, req, res);
+  }
+
+  @Post('forgot-password')
+  @ApiOperation({ summary: 'Send a password reset link' })
+  @ApiBody({ type: ForgotPasswordDto })
+  @ApiResponse({
+    status: 200,
+    description: 'If the email exists, a reset link will be sent.',
+  })
+  async forgotPassword(@Body() dto: ForgotPasswordDto, @Req() req: Request) {
+    return this.authService.forgotPassword(dto, req);
+  }
+
+  @Post('reset-password')
+  @ApiOperation({ summary: 'Reset password using an email token' })
+  @ApiBody({ type: ResetPasswordDto })
+  @ApiResponse({
+    status: 200,
+    description: 'Password reset successful.',
+  })
+  async resetPassword(@Body() dto: ResetPasswordDto, @Req() req: Request) {
+    return this.authService.resetPassword(dto, req);
   }
 
   @Post('logout')

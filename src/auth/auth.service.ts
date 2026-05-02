@@ -18,7 +18,9 @@ import { RoleProfilesService } from '../role-profiles/role-profiles.service';
 import { UserDocument } from '../users/entities/user.entity';
 import { UsersService } from '../users/users.service';
 import { AmbuSenseAuth, createBetterAuth } from './better-auth.provider';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { LoginDto } from './dto/login.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 import { SignupDto } from './dto/signup.dto';
 
 type AuthUserPayload = {
@@ -160,6 +162,42 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
     } as never);
 
     this.copyAuthHeaders(authResponse, res);
+  }
+
+  async forgotPassword(dto: ForgotPasswordDto, req: Request) {
+    const authResponse = await this.getAuth().api.requestPasswordReset({
+      body: {
+        email: dto.email,
+      },
+      headers: this.headersFromRequest(req),
+      asResponse: true,
+    } as never);
+    const payload = await this.readAuthResponse(authResponse);
+
+    this.assertAuthResponseOk(authResponse, payload);
+
+    return {
+      message:
+        'If this email exists in our system, check your email for the reset link.',
+    };
+  }
+
+  async resetPassword(dto: ResetPasswordDto, req: Request) {
+    const authResponse = await this.getAuth().api.resetPassword({
+      body: {
+        token: dto.token,
+        newPassword: dto.newPassword,
+      },
+      headers: this.headersFromRequest(req),
+      asResponse: true,
+    } as never);
+    const payload = await this.readAuthResponse(authResponse);
+
+    this.assertAuthResponseOk(authResponse, payload);
+
+    return {
+      message: 'Password reset successfully.',
+    };
   }
 
   async me(user: UserDocument | undefined) {
