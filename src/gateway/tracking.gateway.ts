@@ -45,13 +45,9 @@ export class TrackingGateway
     private readonly roleProfilesService: RoleProfilesService,
   ) {}
 
-  handleConnection(client: Socket) {
-    console.log(`[socket] connected: ${client.id}`);
-  }
+  handleConnection(_client: Socket) {}
 
-  handleDisconnect(client: Socket) {
-    console.log(`[socket] disconnected: ${client.id}`);
-  }
+  handleDisconnect(_client: Socket) {}
 
   @SubscribeMessage('ambulance.location.send')
   async handleAmbulanceLocationSend(
@@ -64,11 +60,6 @@ export class TrackingGateway
     },
     @ConnectedSocket() client: Socket,
   ) {
-    console.log(
-      `[server] received ambulance.location.send from ${client.id}:`,
-      payload,
-    );
-
     try {
       const user = await this.authenticateLocationSender(client);
       await this.assertCanUpdateAmbulanceLocation(user, payload.ambulanceId);
@@ -83,7 +74,6 @@ export class TrackingGateway
       const sameLocation = oldLng === newLng && oldLat === newLat;
 
       if (sameLocation) {
-        console.log('[server] skipped update: same coordinates');
         return { ok: true, skipped: true };
       }
 
@@ -102,12 +92,10 @@ export class TrackingGateway
       };
 
       // 🔹 5. Emit to all clients
-      console.log('[server] emitting ambulance.location.updated:', outgoing);
       this.server.emit('ambulance.location.updated', outgoing);
 
       return { ok: true };
-    } catch (error) {
-      console.error('[server] error handling location:', error);
+    } catch {
       return { ok: false, error: 'failed to update location' };
     }
   }
@@ -195,27 +183,22 @@ export class TrackingGateway
   }
 
   emitEmergencyRequestCreated(request: EmergencyRequestDocument) {
-    console.log('[socket] emitting emergency.request.created:', request.id);
     this.server.emit('emergency.request.created', request);
   }
 
   emitEmergencyRequestUpdated(request: EmergencyRequestDocument) {
-    console.log('[socket] emitting emergency.request.updated:', request.id);
     this.server.emit('emergency.request.updated', request);
   }
 
   emitEmergencyRequestDispatched(request: EmergencyRequestDocument) {
-    console.log('[socket] emitting emergency.request.dispatched:', request.id);
     this.server.emit('emergency.request.dispatched', request);
   }
 
   emitEmergencyRequestCancelled(request: EmergencyRequestDocument) {
-    console.log('[socket] emitting emergency.request.cancelled:', request.id);
     this.server.emit('emergency.request.cancelled', request);
   }
 
   emitEmergencyRequestDeleted(payload: { id: string }) {
-    console.log('[socket] emitting emergency.request.deleted:', payload.id);
     this.server.emit('emergency.request.deleted', payload);
   }
 }
