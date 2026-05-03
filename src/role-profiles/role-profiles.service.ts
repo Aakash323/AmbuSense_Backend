@@ -7,6 +7,8 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { UserRole } from '../constants/enums';
+import type { UserDocument } from '../users/entities/user.entity';
+import { UsersService } from '../users/users.service';
 import { FindDriversQueryDto } from '../drivers/dto/find-drivers-query.dto';
 import {
   Ambulance,
@@ -35,6 +37,7 @@ export class RoleProfilesService {
     private readonly patientModel: Model<PatientDocument>,
     @InjectModel(Ambulance.name)
     private readonly ambulanceModel: Model<AmbulanceDocument>,
+    private readonly usersService: UsersService,
   ) {}
 
   async createForRole(role: UserRole, user: Types.ObjectId) {
@@ -198,6 +201,25 @@ export class RoleProfilesService {
     }
 
     return this.sanitize(profile);
+  }
+
+  async removeDriver(id: string, currentUser: UserDocument) {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new BadRequestException('Invalid driver id');
+    }
+
+    const profile = await this.driverModel.findById(id).exec();
+
+    if (!profile) {
+      throw new NotFoundException('Driver profile not found');
+    }
+
+    const userId = profile.user.toString();
+
+    await this.usersService.remove(userId, currentUser);
+    await this.driverModel.findByIdAndDelete(id).exec();
+
+    return { message: 'Driver deleted successfully' };
   }
 
   private getModel(role: UserRole): Model<ProfileDocument> {

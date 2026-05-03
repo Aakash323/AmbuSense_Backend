@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -17,9 +18,11 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { AuthGuard } from '../auth/auth.guard';
+import { CurrentUser } from '../auth/current-user.decorator';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { UserRole } from '../constants/enums';
+import type { UserDocument } from '../users/entities/user.entity';
 import { RoleProfilesService } from '../role-profiles/role-profiles.service';
 import { FindDriversQueryDto } from './dto/find-drivers-query.dto';
 import { VerifyDriverDto } from './dto/verify-driver.dto';
@@ -65,5 +68,15 @@ export class DriversController {
       dto.isVerified,
       dto.verificationNote,
     );
+  }
+
+  @Delete(':id')
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Delete a driver profile and user account' })
+  @ApiParam({ name: 'id', example: driverProfileExample.id })
+  @ApiResponse({ status: 200, description: 'Driver deleted.' })
+  @ApiResponse({ status: 403, description: 'Admin role required.' })
+  remove(@Param('id') id: string, @CurrentUser() currentUser: UserDocument) {
+    return this.roleProfilesService.removeDriver(id, currentUser);
   }
 }

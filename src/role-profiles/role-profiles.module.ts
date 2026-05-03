@@ -5,6 +5,7 @@ import {
   AmbulanceSchema,
 } from '../ambulance/entities/ambulance.entity';
 import { MediaModule } from '../media/media.module';
+import { UsersModule } from '../users/users.module';
 import { Admin, AdminSchema } from './entities/admin.entity';
 import { Dispatcher, DispatcherSchema } from './entities/dispatcher.entity';
 import { Driver, DriverSchema } from './entities/driver.entity';
@@ -14,6 +15,7 @@ import { RoleProfilesService } from './role-profiles.service';
 @Module({
   imports: [
     MediaModule,
+    UsersModule,
     MongooseModule.forFeature([
       { name: Admin.name, schema: AdminSchema },
       { name: Dispatcher.name, schema: DispatcherSchema },
