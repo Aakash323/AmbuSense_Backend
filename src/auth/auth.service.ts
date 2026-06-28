@@ -364,8 +364,16 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
         ? [authResponse.headers.get('set-cookie') as string]
         : [];
 
+    const isProduction = this.configService.get<string>('NODE_ENV') === 'production';
+
     for (const cookie of cookies) {
-      res.append('Set-Cookie', cookie);
+      const normalizedCookie = isProduction
+        ? cookie
+            .replace(/SameSite=Lax/gi, 'SameSite=None')
+            .replace(/SameSite=Strict/gi, 'SameSite=None')
+        : cookie;
+
+      res.append('Set-Cookie', normalizedCookie);
     }
   }
 
@@ -411,3 +419,4 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
     throw new HttpException(message, authResponse.status);
   }
 }
+
