@@ -27,7 +27,11 @@ import { UserDocument } from '../users/entities/user.entity';
 
 @WebSocketGateway({
   cors: {
-    origin: 'http://localhost:3000',
+    origin: [
+      'http://localhost:3000',
+      'https://ambu-sense-frontend.vercel.app',
+      'https://ambusense-frontend.vercel.app',
+    ],
     credentials: true,
   },
 })
@@ -64,25 +68,21 @@ export class TrackingGateway
       const user = await this.authenticateLocationSender(client);
       await this.assertCanUpdateAmbulanceLocation(user, payload.ambulanceId);
 
-      // 🔹 1. Get current ambulance from DB
       const current = await this.ambulanceService.findOne(payload.ambulanceId);
 
       const [oldLng, oldLat] = current.currentLocation.coordinates;
       const [newLng, newLat] = payload.coordinates;
 
-      // 🔹 2. Check if location is same
       const sameLocation = oldLng === newLng && oldLat === newLat;
 
       if (sameLocation) {
         return { ok: true, skipped: true };
       }
 
-      // 🔹 3. Update database
       const updated = await this.ambulanceService.update(payload.ambulanceId, {
         coordinates: payload.coordinates,
       });
 
-      // 🔹 4. Prepare outgoing event
       const outgoing = {
         id: updated.id,
         currentLocation: updated.currentLocation,
@@ -91,7 +91,6 @@ export class TrackingGateway
         timestamp: payload.timestamp,
       };
 
-      // 🔹 5. Emit to all clients
       this.server.emit('ambulance.location.updated', outgoing);
 
       return { ok: true };

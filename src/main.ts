@@ -21,7 +21,8 @@ async function bootstrap() {
   const configService = app.get(ConfigService);
   const NODE_ENV = process.env.NODE_ENV || 'development';
 
-  // Increase body parser limits for large file uploads
+  app.set('trust proxy', 1);
+
   app.use(express.json({ limit: '100mb' }));
   app.use(express.urlencoded({ limit: '100mb', extended: true }));
   app.use((req: Request, _res: Response, next: NextFunction) => {
@@ -40,7 +41,6 @@ async function bootstrap() {
     next();
   });
 
-  // Ensure upload directories exist
   const uploadDirs = [
     join(process.cwd(), 'uploads'),
     join(process.cwd(), 'uploads', 'temp'),
@@ -53,18 +53,27 @@ async function bootstrap() {
     }
   });
 
-  // Serve uploaded files statically
   app.useStaticAssets(join(process.cwd(), 'uploads'), {
     prefix: '/api/uploads',
   });
 
   app.use(cookieParser());
 
-  // CORS configuration
-  const ALLOWED_ORIGINS = ['http://localhost:3000',"https://ambu-sense-frontend.vercel.app"];
+  const ALLOWED_ORIGINS = [
+    'http://localhost:3000',
+    'https://ambu-sense-frontend.vercel.app',
+    'https://ambusense-frontend.vercel.app',
+  ];
 
   app.enableCors({
-    origin: ALLOWED_ORIGINS,
+    origin: (origin, callback) => {
+      if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+        callback(null, true);
+        return;
+      }
+
+      callback(new Error('Not allowed by CORS'), false);
+    },
     credentials: true,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     allowedHeaders: [
@@ -77,7 +86,6 @@ async function bootstrap() {
     optionsSuccessStatus: 204,
   });
 
-  // Global validation pipe with clean error messages
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
@@ -97,7 +105,6 @@ async function bootstrap() {
 
   app.setGlobalPrefix('api');
 
-  // Secure Swagger UI with Basic Auth (only in non-production)
   if (NODE_ENV !== 'production') {
     const swaggerPassword = process.env.SWAGGER_PASSWORD;
 
@@ -125,10 +132,10 @@ async function bootstrap() {
       });
 
       console.log(
-        `Swagger UI is protected with Basic Auth → http://localhost:${configService.get('PORT')}/api/docs`,
+        `Swagger UI is protected with Basic Auth ? http://localhost:${configService.get('PORT')}/api/docs`,
       );
     } else {
-      console.warn('SWAGGER_PASSWORD not set — Swagger UI disabled');
+      console.warn('SWAGGER_PASSWORD not set � Swagger UI disabled');
     }
   }
 

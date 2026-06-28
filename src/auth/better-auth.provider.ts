@@ -24,7 +24,7 @@ function getFrontendUrl(configService: ConfigService) {
   return (
     configService.get<string>('FRONTEND_URL') ??
     configService.get<string>('APP_FRONTEND_URL') ??
-    'http://localhost:3000'
+    'https://ambu-sense-frontend.vercel.app'
   ).replace(/\/$/, '');
 }
 
