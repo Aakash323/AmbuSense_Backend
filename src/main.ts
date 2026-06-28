@@ -61,7 +61,7 @@ async function bootstrap() {
   app.use(cookieParser());
 
   // CORS configuration
-  const ALLOWED_ORIGINS = ['http://localhost:3000'];
+  const ALLOWED_ORIGINS = ['http://localhost:3000',"https://ambu-sense-frontend.vercel.app"];
 
   app.enableCors({
     origin: ALLOWED_ORIGINS,
