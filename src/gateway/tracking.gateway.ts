@@ -20,7 +20,7 @@ import { Server, Socket } from 'socket.io';
 import { AmbulanceService } from '../ambulance/ambulance.service';
 import { AmbulanceDocument } from '../ambulance/entities/ambulance.entity';
 import { AuthService } from '../auth/auth.service';
-import { UserRole } from '../constants/enums';
+import { AmbulanceStatus, UserRole } from '../constants/enums';
 import { EmergencyRequestDocument } from '../emergency-request/entities/emergency-request.entity';
 import { RoleProfilesService } from '../role-profiles/role-profiles.service';
 import { UserDocument } from '../users/entities/user.entity';
@@ -49,9 +49,51 @@ export class TrackingGateway
     private readonly roleProfilesService: RoleProfilesService,
   ) {}
 
-  handleConnection(_client: Socket) {}
+  /** Map socket.id -> UserDocument for online drivers */
+  private readonly connectedDrivers = new Map<string, UserDocument>();
 
-  handleDisconnect(_client: Socket) {}
+  async handleConnection(client: Socket) {
+    try {
+      const user = await this.authService.getCurrentUser({
+        headers: client.handshake.headers,
+      } as Request);
+
+      if (user?.role === UserRole.DRIVER) {
+        this.connectedDrivers.set(client.id, user);
+      }
+    } catch {
+      // Not authenticated — ignore, only tracking connections matter
+    }
+  }
+
+  async handleDisconnect(client: Socket) {
+    const user = this.connectedDrivers.get(client.id);
+    this.connectedDrivers.delete(client.id);
+
+    if (!user) {
+      return;
+    }
+
+    try {
+      // Find driver's ambulance
+      const ambulance = await this.ambulanceService.findDriverAmbulance(user);
+
+      if (
+        ambulance.status === 'available' ||
+        ambulance.status === 'completed'
+      ) {
+        await this.ambulanceService.updateStatusDirectly(
+          ambulance.id,
+          AmbulanceStatus.OFFLINE,
+        );
+        console.log(
+          `[Gateway] Driver ${user.phone} disconnected — ambulance ${ambulance.ambulanceCode} set to OFFLINE`,
+        );
+      }
+    } catch {
+      // Driver may not have an ambulance — silently ignore
+    }
+  }
 
   @SubscribeMessage('ambulance.location.send')
   async handleAmbulanceLocationSend(

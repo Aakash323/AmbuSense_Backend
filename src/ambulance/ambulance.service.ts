@@ -30,7 +30,10 @@ const ALLOWED_STATUS_TRANSITIONS: Record<AmbulanceStatus, AmbulanceStatus[]> = {
   [AmbulanceStatus.AT_PATIENT]: [AmbulanceStatus.TRANSPORTING],
   [AmbulanceStatus.TRANSPORTING]: [AmbulanceStatus.AT_HOSPITAL],
   [AmbulanceStatus.AT_HOSPITAL]: [AmbulanceStatus.COMPLETED],
-  [AmbulanceStatus.COMPLETED]: [AmbulanceStatus.AVAILABLE],
+  [AmbulanceStatus.COMPLETED]: [
+    AmbulanceStatus.AVAILABLE,
+    AmbulanceStatus.OFFLINE,
+  ],
 };
 
 @Injectable()
@@ -291,6 +294,19 @@ export class AmbulanceService implements OnModuleInit {
     return updated;
   }
 
+  /**
+   * Force-sets ambulance status without checking allowed transitions.
+   * Used internally (e.g., on driver disconnect) to safely mark as OFFLINE.
+   */
+  async updateStatusDirectly(
+    ambulanceId: string,
+    status: AmbulanceStatus,
+  ): Promise<void> {
+    await this.ambulanceModel.findByIdAndUpdate(ambulanceId, {
+      $set: { status },
+    });
+  }
+
   async remove(id: string) {
     const deleted = await this.ambulanceModel.findByIdAndDelete(id);
 
@@ -319,6 +335,19 @@ export class AmbulanceService implements OnModuleInit {
     }
 
     return undefined;
+  }
+
+  async findDriverAmbulance(user: UserDocument): Promise<AmbulanceDocument> {
+    const ambulance = await this.ambulanceModel.findOne({
+      phone: user.phone,
+      isActive: true,
+    });
+
+    if (!ambulance) {
+      throw new NotFoundException('Driver ambulance not found');
+    }
+
+    return ambulance;
   }
 
   private async assertDriverCanAccessAmbulance(

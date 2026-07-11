@@ -55,4 +55,16 @@ export class DriverTripsController {
   ) {
     return this.emergencyRequestService.updateMyTripStatus(user, dto.status);
   }
+
+  @Patch('reject')
+  @ApiOperation({ summary: 'Reject the current assigned trip' })
+  @ApiResponse({
+    status: 200,
+    description: 'Trip rejected and returned to pending queue.',
+    schema: { example: { message: 'Trip rejected successfully' } },
+  })
+  @ApiResponse({ status: 404, description: 'No assigned trip found.' })
+  rejectTrip(@CurrentUser() user: UserDocument) {
+    return this.emergencyRequestService.rejectMyTrip(user);
+  }
 }

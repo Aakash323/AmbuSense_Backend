@@ -89,6 +89,12 @@ export class EmergencyRequest {
   @Prop({ default: '' })
   cancellationReason?: string;
 
+  @Prop({
+    type: [{ type: Types.ObjectId, ref: 'Ambulance' }],
+    default: [],
+  })
+  rejectedAmbulances?: Types.ObjectId[];
+
   createdAt?: Date;
   updatedAt?: Date;
 }

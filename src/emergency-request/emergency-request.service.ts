@@ -629,6 +629,45 @@ export class EmergencyRequestService implements OnModuleInit {
     return this.updateStatus(trip.id, newStatus, user);
   }
 
+  async rejectMyTrip(user: UserDocument) {
+    await this.assertDriverVerified(user);
+
+    const ambulance = await this.findDriverAmbulance(user);
+    const trip = await this.emergencyRequestModel.findOne({
+      assignedAmbulance: ambulance._id,
+      status: EmergencyRequestStatus.ASSIGNED,
+    });
+
+    if (!trip) {
+      throw new NotFoundException('No assigned trip found to reject');
+    }
+
+    // Track rejected ambulance to skip it on re-assignment
+    trip.rejectedAmbulances = [
+      ...((trip.rejectedAmbulances ?? []) as Types.ObjectId[]),
+      ambulance._id as Types.ObjectId,
+    ];
+
+    // Reset request back to pending (unassigned)
+    trip.assignedAmbulance = null;
+    trip.status = EmergencyRequestStatus.PENDING;
+    trip.assignedAt = null;
+    await trip.save();
+
+    // Release ambulance back to available
+    await this.releaseAmbulance(ambulance._id as Types.ObjectId);
+
+    const result = await this.findOne(trip.id);
+    this.emitEmergencyRequestUpdated(result);
+
+    // Try to assign to next nearest ambulance (excluding rejected ones)
+    this.tryAssignPendingRequests().catch((err) => {
+      console.error('[RejectMyTrip] Auto-assign error:', err);
+    });
+
+    return { message: 'Trip rejected successfully' };
+  }
+
   private async findPatientOwnedRequest(id: string, user: UserDocument) {
     if (!isValidObjectId(id)) {
       throw new NotFoundException('Emergency request not found');
@@ -764,21 +803,26 @@ export class EmergencyRequestService implements OnModuleInit {
   private async claimNearestAvailableAmbulance(
     coordinates: [number, number],
     assignedAt: Date,
+    excludeAmbulanceIds: Types.ObjectId[] = [],
   ): Promise<AmbulanceDocument | null> {
-    const candidates = await this.ambulanceModel
-      .find({
-        isActive: true,
-        status: AmbulanceStatus.AVAILABLE,
-        currentLocation: {
-          $near: {
-            $geometry: {
-              type: 'Point',
-              coordinates,
-            },
+    const filter: Record<string, unknown> = {
+      isActive: true,
+      status: AmbulanceStatus.AVAILABLE,
+      currentLocation: {
+        $near: {
+          $geometry: {
+            type: 'Point',
+            coordinates,
           },
         },
-      })
-      .limit(20);
+      },
+    };
+
+    if (excludeAmbulanceIds.length > 0) {
+      filter._id = { $nin: excludeAmbulanceIds };
+    }
+
+    const candidates = await this.ambulanceModel.find(filter).limit(20);
 
     for (const candidate of candidates) {
       const claimed = await this.ambulanceModel.findOneAndUpdate(
@@ -930,6 +974,7 @@ export class EmergencyRequestService implements OnModuleInit {
         const ambulance = await this.claimNearestAvailableAmbulance(
           pickupCoords,
           assignedAt,
+          (request.rejectedAmbulances ?? []) as Types.ObjectId[],
         );
 
         if (!ambulance) {

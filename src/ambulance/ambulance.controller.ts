@@ -84,6 +84,19 @@ export class AmbulanceController {
     return this.ambulanceService.findAll(query);
   }
 
+  @Get('my-ambulance')
+  @Roles(UserRole.DRIVER)
+  @ApiOperation({ summary: 'Get the authenticated driver ambulance' })
+  @ApiResponse({
+    status: 200,
+    description: 'Driver ambulance details.',
+    schema: { example: ambulanceExample },
+  })
+  @ApiResponse({ status: 404, description: 'Driver ambulance not found.' })
+  findMyAmbulance(@CurrentUser() user: UserDocument) {
+    return this.ambulanceService.findDriverAmbulance(user);
+  }
+
   @Get(':id')
   @Roles(UserRole.ADMIN, UserRole.DISPATCHER, UserRole.DRIVER)
   @ApiOperation({ summary: 'Get an ambulance by id' })
