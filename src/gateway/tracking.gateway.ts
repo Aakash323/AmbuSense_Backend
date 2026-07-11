@@ -52,6 +52,15 @@ export class TrackingGateway
   /** Map socket.id -> UserDocument for online drivers */
   private readonly connectedDrivers = new Map<string, UserDocument>();
 
+  /**
+   * Pending "go offline" timers keyed by driver phone number.
+   * Cancelled if the same driver reconnects within the grace period.
+   */
+  private readonly offlineTimers = new Map<string, NodeJS.Timeout>();
+
+  /** How long (ms) to wait before marking a driver's ambulance OFFLINE after disconnect */
+  private readonly OFFLINE_GRACE_MS = 12_000;
+
   async handleConnection(client: Socket) {
     try {
       const user = await this.authService.getCurrentUser({
@@ -60,6 +69,16 @@ export class TrackingGateway
 
       if (user?.role === UserRole.DRIVER) {
         this.connectedDrivers.set(client.id, user);
+
+        // Cancel any pending offline timer for this driver (reconnect within grace period)
+        const pending = this.offlineTimers.get(user.phone);
+        if (pending) {
+          clearTimeout(pending);
+          this.offlineTimers.delete(user.phone);
+          console.log(
+            `[Gateway] Driver ${user.phone} reconnected — offline timer cancelled`,
+          );
+        }
       }
     } catch {
       // Not authenticated — ignore, only tracking connections matter
@@ -74,25 +93,56 @@ export class TrackingGateway
       return;
     }
 
-    try {
-      // Find driver's ambulance
-      const ambulance = await this.ambulanceService.findDriverAmbulance(user);
+    // Check if this driver still has another active socket connection
+    // (multiple tabs or a reconnect already in flight)
+    const stillConnected = [...this.connectedDrivers.values()].some(
+      (u) => u.phone === user.phone,
+    );
 
-      if (
-        ambulance.status === 'available' ||
-        ambulance.status === 'completed'
-      ) {
-        await this.ambulanceService.updateStatusDirectly(
-          ambulance.id,
-          AmbulanceStatus.OFFLINE,
-        );
-        console.log(
-          `[Gateway] Driver ${user.phone} disconnected — ambulance ${ambulance.ambulanceCode} set to OFFLINE`,
-        );
-      }
-    } catch {
-      // Driver may not have an ambulance — silently ignore
+    if (stillConnected) {
+      return;
     }
+
+    // Debounce: only go offline after a grace period so that brief
+    // disconnects (page navigations, refreshes) don't flip the status.
+    const existing = this.offlineTimers.get(user.phone);
+    if (existing) {
+      clearTimeout(existing);
+    }
+
+    const timer = setTimeout(async () => {
+      this.offlineTimers.delete(user.phone);
+
+      // Check again — driver may have reconnected while the timer was running
+      const reconnected = [...this.connectedDrivers.values()].some(
+        (u) => u.phone === user.phone,
+      );
+      if (reconnected) return;
+
+      try {
+        const ambulance = await this.ambulanceService.findDriverAmbulance(user);
+
+        if (
+          ambulance.status === 'available' ||
+          ambulance.status === 'completed'
+        ) {
+          await this.ambulanceService.updateStatusDirectly(
+            ambulance.id,
+            AmbulanceStatus.OFFLINE,
+          );
+          console.log(
+            `[Gateway] Driver ${user.phone} offline — ambulance ${ambulance.ambulanceCode} set to OFFLINE`,
+          );
+        }
+      } catch {
+        // Driver may not have an ambulance — silently ignore
+      }
+    }, this.OFFLINE_GRACE_MS);
+
+    this.offlineTimers.set(user.phone, timer);
+    console.log(
+      `[Gateway] Driver ${user.phone} disconnected — offline in ${this.OFFLINE_GRACE_MS / 1000}s if no reconnect`,
+    );
   }
 
   @SubscribeMessage('ambulance.location.send')
