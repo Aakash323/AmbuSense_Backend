@@ -860,7 +860,27 @@ export class EmergencyRequestService implements OnModuleInit {
     return claimed;
   }
 
+  /**
+   * Releases an ambulance back to AVAILABLE status and then immediately tries
+   * to auto-assign any pending requests so that no idle ambulance and pending
+   * request ever co-exist.
+   */
   private async releaseAmbulance(ambulanceId: Types.ObjectId) {
+    await this.releaseAmbulanceCore(ambulanceId);
+
+    // Fire-and-forget: try to assign any waiting pending requests.
+    // Must not await — we don't want to block the caller's response.
+    this.tryAssignPendingRequests().catch((err) => {
+      console.error('[EmergencyRequestService] Auto-assign error after release:', err);
+    });
+  }
+
+  /**
+   * Core release logic: sets the ambulance back to AVAILABLE without
+   * triggering auto-assignment.  Used internally by tryAssignPendingRequests
+   * to avoid infinite recursion.
+   */
+  private async releaseAmbulanceCore(ambulanceId: Types.ObjectId) {
     const ambulance = await this.ambulanceModel.findById(ambulanceId);
 
     if (!ambulance) {
@@ -875,6 +895,96 @@ export class EmergencyRequestService implements OnModuleInit {
     ambulance.completedAt = null;
 
     await ambulance.save();
+  }
+
+  /**
+   * Scans for pending (unassigned) emergency requests and attempts to dispatch
+   * each one using the nearest available ambulance + hospital.
+   *
+   * Invariant enforced: an available ambulance and a pending request must
+   * never co-exist — this method is called every time an ambulance becomes free.
+   *
+   * Public so that AmbulanceService can also call it when a driver manually
+   * sets their ambulance back to AVAILABLE via the status update endpoint.
+   */
+  async tryAssignPendingRequests(): Promise<void> {
+    console.log('[AutoAssign] tryAssignPendingRequests() called');
+
+    const pendingRequests = await this.emergencyRequestModel
+      .find({
+        status: EmergencyRequestStatus.PENDING,
+        assignedAmbulance: null,
+      })
+      .sort({ createdAt: 1 }) // oldest first
+      .limit(10);
+
+    console.log(`[AutoAssign] Found ${pendingRequests.length} pending request(s)`);
+
+    for (const request of pendingRequests) {
+      try {
+        const pickupCoords = request.pickupLocation.coordinates;
+        const assignedAt = new Date();
+
+        console.log(`[AutoAssign] Trying request ${request._id} at coords ${pickupCoords}`);
+
+        const ambulance = await this.claimNearestAvailableAmbulance(
+          pickupCoords,
+          assignedAt,
+        );
+
+        if (!ambulance) {
+          console.log('[AutoAssign] No available ambulance found — stopping.');
+          break;
+        }
+
+        console.log(`[AutoAssign] Claimed ambulance ${ambulance._id} (${ambulance.ambulanceCode})`);
+
+        // Determine hospital (respect user-chosen hospital if already set)
+        let hospitalId: Types.ObjectId | null = request.assignedHospital
+          ? (request.assignedHospital as Types.ObjectId)
+          : null;
+
+        if (!hospitalId) {
+          const hospital = await this.findNearestValidHospital(pickupCoords);
+
+          if (!hospital) {
+            console.log('[AutoAssign] No valid hospital found — releasing ambulance.');
+            await this.releaseAmbulanceCore(ambulance._id as Types.ObjectId);
+            continue;
+          }
+
+          console.log(`[AutoAssign] Found hospital ${hospital._id} (${hospital.name})`);
+          hospitalId = hospital._id as Types.ObjectId;
+          request.hospitalAssignmentTechnique =
+            HospitalAssignmentTechnique.SYSTEM_AUTO;
+        }
+
+        const reserved = await this.reserveHospitalBed(hospitalId);
+
+        if (!reserved) {
+          console.log('[AutoAssign] Hospital bed reservation failed — releasing ambulance.');
+          await this.releaseAmbulanceCore(ambulance._id as Types.ObjectId);
+          continue;
+        }
+
+        request.assignedAmbulance = ambulance._id as Types.ObjectId;
+        request.assignedHospital = hospitalId;
+        request.status = EmergencyRequestStatus.ASSIGNED;
+        request.assignedAt = assignedAt;
+        request.hospitalBedReserved = true;
+
+        await request.save();
+
+        console.log(`[AutoAssign] ✅ Request ${request._id} assigned to ambulance ${ambulance.ambulanceCode}`);
+
+        const result = await this.findOne(request.id);
+        this.emitEmergencyRequestDispatched(result);
+      } catch (error) {
+        console.error('[AutoAssign] Error processing request:', error);
+      }
+    }
+
+    console.log('[AutoAssign] tryAssignPendingRequests() complete');
   }
 
   private async reserveHospitalBed(
@@ -939,18 +1049,20 @@ export class EmergencyRequestService implements OnModuleInit {
   private async findNearestValidHospital(
     coordinates: [number, number],
   ): Promise<HospitalDocument | null> {
-    return this.hospitalModel.findOne({
-      status: 'available',
-      availableBeds: { $gt: 0 },
-      location: {
-        $near: {
-          $geometry: {
-            type: 'Point',
-            coordinates,
+    return this.hospitalModel
+      .findOne({
+        status: 'available',
+        availableBeds: { $gt: 0 },
+        location: {
+          $near: {
+            $geometry: {
+              type: 'Point',
+              coordinates,
+            },
           },
         },
-      },
-    });
+      })
+      .exec();
   }
 
   private async findValidHospitalById(

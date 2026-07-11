@@ -17,6 +17,7 @@ import { TrackingGateway } from '../gateway/tracking.gateway';
 import { FindAmbulancesQueryDto } from './dto/find-ambulances-query.dto';
 import type { UserDocument } from '../users/entities/user.entity';
 import { RoleProfilesService } from '../role-profiles/role-profiles.service';
+import { EmergencyRequestService } from '../emergency-request/emergency-request.service';
 
 const ALLOWED_STATUS_TRANSITIONS: Record<AmbulanceStatus, AmbulanceStatus[]> = {
   [AmbulanceStatus.OFFLINE]: [AmbulanceStatus.AVAILABLE],
@@ -35,16 +36,22 @@ const ALLOWED_STATUS_TRANSITIONS: Record<AmbulanceStatus, AmbulanceStatus[]> = {
 @Injectable()
 export class AmbulanceService implements OnModuleInit {
   private trackingGateway?: TrackingGateway;
+  private emergencyRequestService?: EmergencyRequestService;
 
   constructor(
     @InjectModel(Ambulance.name)
     private readonly ambulanceModel: Model<AmbulanceDocument>,
     private readonly moduleRef: ModuleRef,
     private readonly roleProfilesService: RoleProfilesService,
-  ) {}
+  ) { }
 
   onModuleInit() {
     this.trackingGateway = this.moduleRef.get(TrackingGateway, {
+      strict: false,
+    });
+    // Lazy inject to avoid circular dependency — EmergencyRequestModule
+    // already imports AmbulanceModule indirectly through Mongoose models.
+    this.emergencyRequestService = this.moduleRef.get(EmergencyRequestService, {
       strict: false,
     });
   }
@@ -266,6 +273,20 @@ export class AmbulanceService implements OnModuleInit {
     });
 
     this.emitAmbulanceUpdated(updated);
+
+    // Enforce the invariant: no available ambulance should co-exist with a
+    // pending request.  Triggered whenever the ambulance becomes free so that
+    // waiting requests are picked up immediately without slack time.
+    if (nextStatus === AmbulanceStatus.AVAILABLE) {
+      console.log('[AmbulanceService] Ambulance became AVAILABLE, triggering auto-assign...');
+      if (!this.emergencyRequestService) {
+        console.error('[AmbulanceService] emergencyRequestService is NOT injected — auto-assign skipped!');
+      } else {
+        this.emergencyRequestService.tryAssignPendingRequests().catch((err) => {
+          console.error('[AmbulanceService] Auto-assign error:', err);
+        });
+      }
+    }
 
     return updated;
   }
